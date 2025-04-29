@@ -1,4 +1,4 @@
-.PHONY: all build clean run-relay run-publisher run-monitor test
+.PHONY: all build clean run-relay run-publisher run-monitor test test-unit test-integration test-all
 
 # Binary output names
 RELAY_BIN=nostr-relay
@@ -17,6 +17,7 @@ build:
 # Clean up binaries
 clean:
 	rm -f $(RELAY_BIN) $(PUBLISHER_BIN) $(MONITOR_BIN)
+	rm -f test_nostr.db
 
 # Run the relay server
 run-relay:
@@ -38,9 +39,19 @@ run-publisher-multi:
 run-monitor:
 	go run ./cmd/monitor/main.go
 
-# Run tests
-test:
-	go test -v ./...
+# Run unit tests only
+test-unit:
+	go test -v ./relay ./client
+
+# Run integration tests only
+test-integration: build
+	go test -v ./test
+
+# Run all tests
+test-all: test-unit test-integration
+
+# Default test target runs all tests
+test: test-all
 
 # Install dependencies
 deps:
@@ -51,6 +62,10 @@ install:
 	go install ./cmd/relay
 	go install ./cmd/publisher
 	go install ./cmd/monitor
+
+# Run a full validation test
+validate: build test-all
+	@echo "All validation tests passed!"
 
 # Help target
 help:
@@ -63,6 +78,10 @@ help:
 	@echo "  run-publisher-interactive - Run the publisher in interactive mode"
 	@echo "  run-publisher-multi - Run the publisher with 5 messages"
 	@echo "  run-monitor         - Run the database monitor"
-	@echo "  test                - Run all tests"
+	@echo "  test-unit           - Run unit tests only"
+	@echo "  test-integration    - Run integration tests only"
+	@echo "  test-all            - Run all tests"
+	@echo "  test                - Run all tests (alias for test-all)"
+	@echo "  validate            - Build and run all tests"
 	@echo "  deps                - Install dependencies"
 	@echo "  install             - Install binaries to GOPATH/bin"

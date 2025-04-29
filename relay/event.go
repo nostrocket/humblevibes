@@ -7,6 +7,9 @@ import (
 	"errors"
 	"fmt"
 	"time"
+
+	"github.com/btcsuite/btcd/btcec/v2"
+	"github.com/btcsuite/btcd/btcec/v2/schnorr"
 )
 
 // Event represents a Nostr event
@@ -84,9 +87,51 @@ func validateEvent(event *Event) error {
 		return errors.New("invalid event ID")
 	}
 
-	// TODO: Implement signature verification
-	// For a basic relay, we'll skip actual signature verification
-	// In a production relay, you would verify the signature using the pubkey
+	// Verify the signature
+	if err := verifySignature(event); err != nil {
+		return fmt.Errorf("invalid signature: %v", err)
+	}
+
+	return nil
+}
+
+// verifySignature verifies the signature of an event
+func verifySignature(event *Event) error {
+	// Decode the public key
+	pubKeyBytes, err := hex.DecodeString(event.PubKey)
+	if err != nil {
+		return fmt.Errorf("invalid public key format: %v", err)
+	}
+
+	// Decode the signature
+	sigBytes, err := hex.DecodeString(event.Sig)
+	if err != nil {
+		return fmt.Errorf("invalid signature format: %v", err)
+	}
+
+	// Decode the event ID (which is what was signed)
+	idBytes, err := hex.DecodeString(event.ID)
+	if err != nil {
+		return fmt.Errorf("invalid ID format: %v", err)
+	}
+
+	// Parse the public key - Nostr uses compressed secp256k1 public keys without prefix byte
+	// We need to add the 0x02 prefix byte for parsing
+	pubKey, err := btcec.ParsePubKey(append([]byte{0x02}, pubKeyBytes...))
+	if err != nil {
+		return fmt.Errorf("failed to parse public key: %v", err)
+	}
+
+	// Parse the signature
+	sig, err := schnorr.ParseSignature(sigBytes)
+	if err != nil {
+		return fmt.Errorf("failed to parse signature: %v", err)
+	}
+
+	// Verify the signature
+	if !sig.Verify(idBytes, pubKey) {
+		return errors.New("signature verification failed")
+	}
 
 	return nil
 }
