@@ -18,7 +18,6 @@
 # Binary files
 *.bin
 *.dat
-*.db
 *.sqlite
 *.sqlite3
 
@@ -55,22 +54,10 @@ Temporary Items
 .LSOverride
 
 # Go specific
-/bin/
 /pkg/
-*.exe
-*.exe~
-*.dll
-*.so
-*.dylib
-*.test
-*.out
 go.work
 
 # Editor directories and files
-.idea/
-.vscode/
-*.swp
-*.swo
 *~
 
 # Compiled Object files, Static and Dynamic libs
@@ -79,4 +66,36 @@ go.work
 
 # Debug files
 debug/
+
+# Binary output directory
+/bin/
+
+# Compiled binaries
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+
+# Test binary, built with `go test -c`
+*.test
+
+# Output of the go coverage tool
+*.out
+
+# Database files
+*.db
+
+# Log files
 *.log
+
+# Dependency directories (remove these if you want to check in your vendor directory)
+/vendor/
+
+# IDE specific files
+.vscode/
+*.swp
+*.swo
+
+# OS specific files
+Thumbs.db

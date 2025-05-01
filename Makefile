@@ -1,15 +1,22 @@
-.PHONY: all build clean run-relay run-publisher run-monitor test test-unit test-integration test-all
+.PHONY: all build clean run-relay run-relay-custom run-publisher run-publisher-custom run-publisher-interactive run-publisher-multi run-monitor test test-unit test-integration test-all
+
+# Binary output directory
+BIN_DIR=bin
 
 # Binary output names
-RELAY_BIN=nostr-relay
-PUBLISHER_BIN=nostr-publisher
-MONITOR_BIN=nostr-monitor
+RELAY_BIN=$(BIN_DIR)/nostr-relay
+PUBLISHER_BIN=$(BIN_DIR)/nostr-publisher
+MONITOR_BIN=$(BIN_DIR)/nostr-monitor
 
 # Build all binaries
 all: build
 
+# Create bin directory if it doesn't exist
+$(BIN_DIR):
+	mkdir -p $(BIN_DIR)
+
 # Build both relay and publisher
-build:
+build: $(BIN_DIR)
 	go build -o $(RELAY_BIN) ./cmd/relay
 	go build -o $(PUBLISHER_BIN) ./cmd/publisher
 	go build -o $(MONITOR_BIN) ./cmd/monitor
@@ -20,24 +27,34 @@ clean:
 	rm -f test_nostr.db
 
 # Run the relay server
-run-relay:
-	go run ./cmd/relay/main.go
+run-relay: $(RELAY_BIN)
+	$(RELAY_BIN) $(ARGS)
+
+# Run the relay server on a specific port
+# Usage: make run-relay-custom PORT=8081
+run-relay-custom: $(RELAY_BIN)
+	$(RELAY_BIN) -port $(PORT)
 
 # Run the publisher with default settings (single message)
-run-publisher:
-	go run ./cmd/publisher/main.go
+run-publisher: $(PUBLISHER_BIN)
+	$(PUBLISHER_BIN) $(ARGS)
+
+# Run the publisher with custom arguments
+# Usage: make run-publisher-custom ARGS="-relay ws://localhost:8081/ws -num 3"
+run-publisher-custom: $(PUBLISHER_BIN)
+	$(PUBLISHER_BIN) $(ARGS)
 
 # Run the publisher in interactive mode
-run-publisher-interactive:
-	go run ./cmd/publisher/main.go -num 0
+run-publisher-interactive: $(PUBLISHER_BIN)
+	$(PUBLISHER_BIN) -num 0
 
 # Run the publisher with multiple messages
-run-publisher-multi:
-	go run ./cmd/publisher/main.go -num 5
+run-publisher-multi: $(PUBLISHER_BIN)
+	$(PUBLISHER_BIN) -num 5
 
 # Run the database monitor
-run-monitor:
-	go run ./cmd/monitor/main.go
+run-monitor: $(MONITOR_BIN)
+	$(MONITOR_BIN)
 
 # Run unit tests only
 test-unit:
@@ -74,7 +91,9 @@ help:
 	@echo "  build               - Build relay, publisher, and monitor binaries"
 	@echo "  clean               - Remove built binaries"
 	@echo "  run-relay           - Run the relay server"
+	@echo "  run-relay-custom    - Run the relay server on a specific port"
 	@echo "  run-publisher       - Run the publisher (single message)"
+	@echo "  run-publisher-custom - Run the publisher with custom arguments"
 	@echo "  run-publisher-interactive - Run the publisher in interactive mode"
 	@echo "  run-publisher-multi - Run the publisher with 5 messages"
 	@echo "  run-monitor         - Run the database monitor"

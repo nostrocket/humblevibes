@@ -50,7 +50,7 @@ func startRelay(t *testing.T) (*exec.Cmd, context.CancelFunc) {
 	ctx, cancel := context.WithCancel(context.Background())
 	
 	// Start the relay process with the correct path
-	relayPath := "../nostr-relay"
+	relayPath := "../bin/nostr-relay"
 	cmd := exec.CommandContext(ctx, relayPath, "-port", relayPort, "-db", testDBPath)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
