@@ -1,8 +1,11 @@
 package main
 
 import (
+	"encoding/json"
 	"flag"
 	"fmt"
+	"io"
+	"net/http"
 	"os"
 	"os/signal"
 	"strings"
@@ -25,6 +28,69 @@ type Config struct {
 	LogEvents    bool
 	PrintEvents  bool
 	SkipOld      bool
+	UseDiscovery bool // Flag to indicate if we should use relay discovery
+	MaxRelays    int  // Maximum number of relays to discover
+}
+
+// NostrWatchRelay represents a relay from the nostr.watch API response
+type NostrWatchRelay struct {
+	URL      string  `json:"url"`
+	Count    int     `json:"count"`
+	Uptime   float64 `json:"uptime"`
+	Country  string  `json:"country"`
+	Software string  `json:"software"`
+}
+
+// fetchPopularRelays fetches the most popular relays from nostr.watch
+func fetchPopularRelays(maxRelays int) ([]string, error) {
+	forwarderLogger.Info("Discovering relays using nostr.watch...")
+	
+	// Make HTTP request to nostr.watch API
+	resp, err := http.Get("https://api.nostr.watch/v1/online")
+	if err != nil {
+		return nil, fmt.Errorf("failed to connect to nostr.watch: %v", err)
+	}
+	defer resp.Body.Close()
+	
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("nostr.watch API returned status code %d", resp.StatusCode)
+	}
+	
+	// Read and parse the response
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read response body: %v", err)
+	}
+	
+	// The response is a JSON array of relay URLs
+	var relayURLs []string
+	if err := json.Unmarshal(body, &relayURLs); err != nil {
+		return nil, fmt.Errorf("failed to parse relay list: %v", err)
+	}
+	
+	// Filter and limit relays
+	var discoveredRelays []string
+	for i, relayURL := range relayURLs {
+		if i >= maxRelays {
+			break
+		}
+		
+		// Skip relays without wss:// protocol
+		if !strings.HasPrefix(relayURL, "wss://") {
+			continue
+		}
+		
+		discoveredRelays = append(discoveredRelays, relayURL)
+		forwarderLogger.Info("Discovered relay: %s", relayURL)
+	}
+	
+	if len(discoveredRelays) > 0 {
+		forwarderLogger.Info("Discovered %d relays", len(discoveredRelays))
+	} else {
+		return nil, fmt.Errorf("no valid relays discovered")
+	}
+	
+	return discoveredRelays, nil
 }
 
 func main() {
@@ -41,14 +107,9 @@ func main() {
 	printEvents := flag.Bool("print-events", false, "Print each event received before forwarding")
 	flag.BoolVar(printEvents, "p", false, "Print each event received before forwarding (shorthand)")
 	skipOld := flag.Bool("skip-old", false, "Skip events older than 24 hours")
+	useDiscovery := flag.Bool("discover", false, "Discover relays using nostr.watch API when no source relays are specified")
+	maxRelays := flag.Int("max-relays", 10, "Maximum number of relays to discover (used with -discover)")
 	flag.Parse()
-
-	// Validate source relays
-	if *sourceRelays == "" {
-		forwarderLogger.Error("No source relays specified. Use -sources flag to provide relay URLs.")
-		flag.Usage()
-		os.Exit(1)
-	}
 
 	// Parse kinds
 	kindsList := []int{}
@@ -98,32 +159,67 @@ func main() {
 		filters["until"] = *until
 	}
 
+	// Set up source relays - either from command line or discovery
+	var relayList []string
+	
+	// If source relays are empty and discovery is enabled, fetch from nostr.watch
+	if *sourceRelays == "" {
+		if *useDiscovery {
+			discoveredRelays, err := fetchPopularRelays(*maxRelays)
+			if err != nil {
+				forwarderLogger.Error("Failed to discover relays: %v", err)
+				os.Exit(1)
+			}
+			if len(discoveredRelays) == 0 {
+				forwarderLogger.Error("No relays discovered. Please specify source relays manually.")
+				flag.Usage()
+				os.Exit(1)
+			}
+			relayList = discoveredRelays
+		} else {
+			forwarderLogger.Error("No source relays specified. Use -sources flag to provide relay URLs or -discover flag to automatically discover relays.")
+			flag.Usage()
+			os.Exit(1)
+		}
+	} else {
+		// Use manually specified relays
+		relayList = strings.Split(*sourceRelays, ",")
+	}
+
 	// Create configuration
 	config := Config{
-		SourceRelays: strings.Split(*sourceRelays, ","),
+		SourceRelays: relayList,
 		TargetRelay:  *targetRelay,
 		Filters:      filters,
 		BatchSize:    *batchSize,
 		LogEvents:    *logEvents,
 		PrintEvents:  *printEvents,
 		SkipOld:      *skipOld,
+		UseDiscovery: *useDiscovery,
+		MaxRelays:    *maxRelays,
 	}
 
 	// Print configuration
 	forwarderLogger.Info("Nostr Event Forwarder")
 	forwarderLogger.Info("Target relay: %s", config.TargetRelay)
 	forwarderLogger.Info("Source relays: %v", config.SourceRelays)
-	forwarderLogger.Info("Event kinds: %v", kindsList)
-	if *pubkeys != "" {
-		if authors, ok := config.Filters["authors"].([]string); ok && len(authors) > 0 {
-			forwarderLogger.Info("Filtering by authors: %v", authors)
-		}
+	
+	if config.UseDiscovery && len(config.SourceRelays) > 0 {
+		forwarderLogger.Info("Using %d auto-discovered relays (max: %d)", 
+			len(config.SourceRelays), config.MaxRelays)
 	}
-	if *since > 0 {
-		forwarderLogger.Info("Since: %v (%s)", *since, time.Unix(*since, 0).Format(time.RFC3339))
+	
+	if kinds, ok := config.Filters["kinds"].([]int); ok {
+		forwarderLogger.Info("Event kinds: %v", kinds)
 	}
-	if *until > 0 {
-		forwarderLogger.Info("Until: %v (%s)", *until, time.Unix(*until, 0).Format(time.RFC3339))
+	if authors, ok := config.Filters["authors"].([]string); ok {
+		forwarderLogger.Info("Filtering by authors: %v", authors)
+	}
+	if since, ok := config.Filters["since"].(int64); ok {
+		forwarderLogger.Info("Since: %v (%s)", since, time.Unix(since, 0).Format(time.RFC3339))
+	}
+	if until, ok := config.Filters["until"].(int64); ok {
+		forwarderLogger.Info("Until: %v (%s)", until, time.Unix(until, 0).Format(time.RFC3339))
 	}
 	forwarderLogger.Info("Batch size: %d", config.BatchSize)
 	forwarderLogger.Info("Skip old events: %v", config.SkipOld)
