@@ -8,6 +8,7 @@ A simple Nostr relay and client implementation in Go with SQLite storage.
 - **Publisher**: Command-line tool to publish events to relays
 - **Monitor**: Tool to track database changes in real-time
 - **Forwarder**: Tool to subscribe to external relays and forward events to your local relay
+- **Content Export**: Tool to export event content from specific authors to text files
 
 ## Quick Start
 
@@ -34,6 +35,11 @@ make run-monitor
 Forward events from other relays:
 ```bash
 make run-forwarder-custom ARGS="-sources ws://example.com/ws,ws://another.com/ws -kinds 1,4"
+```
+
+Export event content from a pubkey:
+```bash
+make run-export-content-custom PUBKEY=3bf0c63fcb93463407af97a5e5ee64fa883d107ef9e558472c4eb9aaaef47fec
 ```
 
 ## Custom Options
@@ -87,7 +93,28 @@ make run-forwarder-relay SOURCE="ws://relay.example.com/ws" TARGET="ws://localho
 
 # Forward from multiple relays to a custom target with additional filters
 make run-forwarder-relay SOURCE="ws://relay1.com/ws,ws://relay2.com/ws" TARGET="ws://custom-relay.com/ws" ARGS="-kinds 1,4 -log"
-```
+
+## Content Export Options
+
+The content export tool supports several command-line options:
+
+- `--pubkey`: (Required) The public key to filter events by
+- `--db`: Path to SQLite database (default: "nostr.db")
+- `--output`: Output file path (default: "<shortened_pubkey>.txt")
+- `--sort`: Sort order of events: 'asc' or 'desc' by creation time (default: "asc")
+- `--separator`: Separator between event contents (default: two newlines)
+
+Examples:
+
+```bash
+# Export all content from a specific pubkey in chronological order
+make run-export-content-custom PUBKEY=3bf0c63fcb93463407af97a5e5ee64fa883d107ef9e558472c4eb9aaaef47fec
+
+# Export all content in reverse chronological order to a specific file
+make run-export-content-custom PUBKEY=3bf0c63fcb93463407af97a5e5ee64fa883d107ef9e558472c4eb9aaaef47fec ARGS="--sort desc --output my_export.txt"
+
+# Use a custom separator
+make run-export-content-custom PUBKEY=3bf0c63fcb93463407af97a5e5ee64fa883d107ef9e558472c4eb9aaaef47fec ARGS="--separator '\n---\n'"
 
 ## Testing
 

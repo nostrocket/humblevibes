@@ -1,4 +1,4 @@
-.PHONY: all build clean run-relay run-relay-custom run-publisher run-publisher-custom run-publisher-interactive run-publisher-multi run-monitor run-forwarder run-forwarder-custom run-forwarder-relay test test-unit test-integration test-all test-forwarder
+.PHONY: all build clean run-relay run-relay-custom run-publisher run-publisher-custom run-publisher-interactive run-publisher-multi run-monitor run-forwarder run-forwarder-custom run-forwarder-relay run-export-content run-export-content-custom test test-unit test-integration test-all test-forwarder
 
 # Binary output directory
 BIN_DIR=bin
@@ -8,6 +8,7 @@ RELAY_BIN=$(BIN_DIR)/nostr-relay
 PUBLISHER_BIN=$(BIN_DIR)/nostr-publisher
 MONITOR_BIN=$(BIN_DIR)/nostr-monitor
 FORWARDER_BIN=$(BIN_DIR)/nostr-forwarder
+EXPORT_CONTENT_BIN=$(BIN_DIR)/nostr-export-content
 
 # Build all binaries
 all: build
@@ -22,10 +23,11 @@ build: $(BIN_DIR)
 	go build -o $(PUBLISHER_BIN) ./cmd/publisher
 	go build -o $(MONITOR_BIN) ./cmd/monitor
 	go build -o $(FORWARDER_BIN) ./cmd/forwarder
+	go build -o $(EXPORT_CONTENT_BIN) ./cmd/export-content
 
 # Clean up binaries
 clean:
-	rm -f $(RELAY_BIN) $(PUBLISHER_BIN) $(MONITOR_BIN) $(FORWARDER_BIN)
+	rm -f $(RELAY_BIN) $(PUBLISHER_BIN) $(MONITOR_BIN) $(FORWARDER_BIN) $(EXPORT_CONTENT_BIN)
 	rm -f test_nostr.db
 
 # Run the relay server
@@ -72,6 +74,15 @@ run-forwarder-custom: $(FORWARDER_BIN)
 run-forwarder-relay: $(FORWARDER_BIN)
 	$(FORWARDER_BIN) -sources "$(SOURCE)" -target "$(TARGET)" $(ARGS)
 
+# Run the content export tool
+run-export-content: $(EXPORT_CONTENT_BIN)
+	$(EXPORT_CONTENT_BIN) $(ARGS)
+
+# Run the content export tool with custom arguments
+# Usage: make run-export-content-custom PUBKEY=<pubkey> ARGS="-sort desc -output custom.txt"
+run-export-content-custom: $(EXPORT_CONTENT_BIN)
+	$(EXPORT_CONTENT_BIN) --pubkey $(PUBKEY) $(ARGS)
+
 # Run unit tests only
 test-unit:
 	go test -v ./relay ./client
@@ -100,6 +111,7 @@ install:
 	go install ./cmd/publisher
 	go install ./cmd/monitor
 	go install ./cmd/forwarder
+	go install ./cmd/export-content
 
 # Run a full validation test
 validate: build test-all
@@ -121,6 +133,8 @@ help:
 	@echo "  run-forwarder       - Run the forwarder with default settings"
 	@echo "  run-forwarder-custom - Run the forwarder with custom arguments"
 	@echo "  run-forwarder-relay - Run the forwarder with specific source and target relays"
+	@echo "  run-export-content  - Run the content export tool"
+	@echo "  run-export-content-custom - Run the content export tool with specific pubkey and options"
 	@echo "  test-unit           - Run unit tests only"
 	@echo "  test-integration    - Run integration tests only"
 	@echo "  test-all            - Run all tests"
