@@ -5,8 +5,6 @@ import (
 	"fmt"
 	"testing"
 
-	"github.com/btcsuite/btcd/btcec/v2"
-	"github.com/btcsuite/btcd/btcec/v2/schnorr"
 	"github.com/gareth/go-nostr-relay/lib/crypto"
 )
 
@@ -114,13 +112,6 @@ func TestValidateEvent(t *testing.T) {
 	cryptoEvent.ID = id
 
 	// Sign the event
-	idBytes, err := crypto.DecodeID(id)
-	if err != nil {
-		t.Fatalf("❌ Failed to decode ID: %v", err)
-	} else {
-		fmt.Println("✅ Decoded event ID successfully")
-	}
-	
 	signature, err := crypto.SignEvent(cryptoEvent, privateKey)
 	if err != nil {
 		t.Fatalf("❌ Failed to sign event: %v", err)
@@ -222,7 +213,7 @@ func TestValidateEvent(t *testing.T) {
 func TestVerifySignature(t *testing.T) {
 	fmt.Println("🧪 Test: VerifySignature")
 	// Create a private key for testing
-	privateKey, err := btcec.NewPrivateKey()
+	privateKey, err := crypto.GeneratePrivateKey()
 	if err != nil {
 		t.Fatalf("❌ Failed to generate private key: %v", err)
 	} else {
@@ -230,7 +221,7 @@ func TestVerifySignature(t *testing.T) {
 	}
 
 	// Get the public key
-	pubKey := hex.EncodeToString(privateKey.PubKey().SerializeCompressed()[1:])
+	pubKey := crypto.GetPublicKey(privateKey)
 
 	// Create a test event
 	event := &Event{
@@ -241,32 +232,37 @@ func TestVerifySignature(t *testing.T) {
 		Content:   "Hello, world!",
 	}
 
+	// Convert to crypto.Event for ID computation
+	cryptoEvent := &crypto.Event{
+		PubKey:    event.PubKey,
+		CreatedAt: event.CreatedAt,
+		Kind:      event.Kind,
+		Tags:      event.Tags,
+		Content:   event.Content,
+	}
+
 	// Compute the ID
-	id, err := computeEventID(event)
+	id, err := crypto.ComputeEventID(cryptoEvent)
 	if err != nil {
 		t.Fatalf("❌ Failed to compute event ID: %v", err)
 	} else {
 		fmt.Println("✅ Computed event ID successfully")
 	}
 	event.ID = id
+	cryptoEvent.ID = id
 
 	// Sign the event
-	idBytes, err := hex.DecodeString(id)
-	if err != nil {
-		t.Fatalf("❌ Failed to decode ID: %v", err)
-	} else {
-		fmt.Println("✅ Decoded event ID successfully")
-	}
-	sig, err := schnorr.Sign(privateKey, idBytes)
+	signature, err := crypto.SignEvent(cryptoEvent, privateKey)
 	if err != nil {
 		t.Fatalf("❌ Failed to sign event: %v", err)
 	} else {
 		fmt.Println("✅ Signed event successfully")
 	}
-	event.Sig = hex.EncodeToString(sig.Serialize())
+	event.Sig = signature
+	cryptoEvent.Sig = signature
 
 	// Verify the signature
-	err = verifySignature(event)
+	err = crypto.VerifySignature(cryptoEvent)
 	if err != nil {
 		t.Errorf("❌ Signature verification failed: %v", err)
 	} else {
@@ -274,10 +270,10 @@ func TestVerifySignature(t *testing.T) {
 	}
 
 	// Test with invalid signature
-	event.Sig = "0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
-	err = verifySignature(event)
+	cryptoEvent.Sig = "invalid_signature"
+	err = crypto.VerifySignature(cryptoEvent)
 	if err == nil {
-		t.Errorf("❌ Expected signature verification to fail with invalid signature, but it succeeded")
+		t.Errorf("❌ Expected signature verification to fail with invalid signature")
 	} else {
 		fmt.Println("✅ Signature verification failed with invalid signature")
 	}
