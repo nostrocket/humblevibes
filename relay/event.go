@@ -1,16 +1,13 @@
 package relay
 
 import (
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
 	"time"
 
-	"github.com/btcsuite/btcd/btcec/v2"
-	"github.com/btcsuite/btcd/btcec/v2/schnorr"
+	"github.com/gareth/go-nostr-relay/lib/crypto"
 )
 
 // Event represents a Nostr event
@@ -103,103 +100,50 @@ func validateEvent(event *Event) error {
 		fmt.Println("❌ Missing pubkey")
 		return errors.New("missing pubkey")
 	}
+	
 	if event.CreatedAt == 0 {
 		fmt.Println("❌ Missing created_at")
 		return errors.New("missing created_at")
 	}
+	
 	if event.Sig == "" {
 		fmt.Println("❌ Missing sig")
 		return errors.New("missing sig")
 	}
-
-	// Validate event ID
-	computedID, err := computeEventID(event)
+	
+	// Compute the event ID
+	cryptoEvent := &crypto.Event{
+		PubKey:    event.PubKey,
+		CreatedAt: event.CreatedAt,
+		Kind:      event.Kind,
+		Tags:      event.Tags,
+		Content:   event.Content,
+	}
+	
+	computedID, err := crypto.ComputeEventID(cryptoEvent)
 	if err != nil {
 		fmt.Printf("❌ Failed to compute event ID: %v\n", err)
 		return fmt.Errorf("failed to compute event ID: %v", err)
 	}
+	
+	// Verify the event ID
 	if computedID != event.ID {
 		fmt.Printf("❌ ID mismatch: computed=%s vs. provided=%s\n", computedID, event.ID)
-		return errors.New("invalid event ID")
-	} else {
-		fmt.Println("✅ Event ID valid")
+		return fmt.Errorf("event ID mismatch")
 	}
-
+	fmt.Println("✅ Event ID valid")
+	
 	// Verify the signature
-	if err := verifySignature(event); err != nil {
+	cryptoEvent.ID = event.ID
+	cryptoEvent.Sig = event.Sig
+	if err := crypto.VerifySignature(cryptoEvent); err != nil {
 		fmt.Printf("❌ Signature verification failed: %v\n", err)
-		return fmt.Errorf("invalid signature: %v", err)
-	} else {
-		fmt.Println("✅ Signature valid")
+		return fmt.Errorf("signature verification failed: %v", err)
 	}
-
+	fmt.Println("✅ Signature valid")
+	
 	fmt.Println("✅ Event validated successfully")
 	return nil
-}
-
-// verifySignature verifies the signature of an event
-func verifySignature(event *Event) error {
-	// Decode the public key
-	pubKeyBytes, err := hex.DecodeString(event.PubKey)
-	if err != nil {
-		return fmt.Errorf("invalid public key format: %v", err)
-	}
-
-	// Decode the signature
-	sigBytes, err := hex.DecodeString(event.Sig)
-	if err != nil {
-		return fmt.Errorf("invalid signature format: %v", err)
-	}
-
-	// Decode the event ID (which is what was signed)
-	idBytes, err := hex.DecodeString(event.ID)
-	if err != nil {
-		return fmt.Errorf("invalid ID format: %v", err)
-	}
-
-	// Parse the public key - Nostr uses compressed secp256k1 public keys without prefix byte
-	// We need to add the 0x02 prefix byte for parsing
-	pubKey, err := btcec.ParsePubKey(append([]byte{0x02}, pubKeyBytes...))
-	if err != nil {
-		return fmt.Errorf("failed to parse public key: %v", err)
-	}
-
-	// Parse the signature
-	sig, err := schnorr.ParseSignature(sigBytes)
-	if err != nil {
-		return fmt.Errorf("failed to parse signature: %v", err)
-	}
-
-	// Verify the signature
-	if !sig.Verify(idBytes, pubKey) {
-		return errors.New("signature verification failed")
-	}
-
-	return nil
-}
-
-// computeEventID computes the ID of an event according to the Nostr protocol
-func computeEventID(event *Event) (string, error) {
-	// Create a JSON array with the required fields in the specific order
-	// [0, <pubkey>, <created_at>, <kind>, <tags>, <content>]
-	eventArray := []interface{}{
-		0,
-		event.PubKey,
-		event.CreatedAt,
-		event.Kind,
-		event.Tags,
-		event.Content,
-	}
-
-	// Serialize to JSON
-	serialized, err := json.Marshal(eventArray)
-	if err != nil {
-		return "", err
-	}
-
-	// Compute SHA256 hash
-	hash := sha256.Sum256(serialized)
-	return hex.EncodeToString(hash[:]), nil
 }
 
 // storeEvent stores an event in the database

@@ -7,6 +7,7 @@ import (
 
 	"github.com/btcsuite/btcd/btcec/v2"
 	"github.com/btcsuite/btcd/btcec/v2/schnorr"
+	"github.com/gareth/go-nostr-relay/lib/crypto"
 )
 
 func TestComputeEventID(t *testing.T) {
@@ -20,8 +21,17 @@ func TestComputeEventID(t *testing.T) {
 		Content:   "Hello, world!",
 	}
 
+	// Convert to crypto.Event
+	cryptoEvent := &crypto.Event{
+		PubKey:    event.PubKey,
+		CreatedAt: event.CreatedAt,
+		Kind:      event.Kind,
+		Tags:      event.Tags,
+		Content:   event.Content,
+	}
+
 	// Compute the ID
-	id, err := computeEventID(event)
+	id, err := crypto.ComputeEventID(cryptoEvent)
 	if err != nil {
 		t.Fatalf("❌ Failed to compute event ID: %v", err)
 	} else {
@@ -45,9 +55,10 @@ func TestComputeEventID(t *testing.T) {
 
 	// Set the ID on the event
 	event.ID = id
+	cryptoEvent.ID = id
 
 	// Compute the ID again and verify it's the same
-	id2, err := computeEventID(event)
+	id2, err := crypto.ComputeEventID(cryptoEvent)
 	if err != nil {
 		t.Fatalf("❌ Failed to compute event ID second time: %v", err)
 	} else {
@@ -64,7 +75,7 @@ func TestComputeEventID(t *testing.T) {
 func TestValidateEvent(t *testing.T) {
 	fmt.Println("🧪 Test: ValidateEvent")
 	// Create a private key for testing
-	privateKey, err := btcec.NewPrivateKey()
+	privateKey, err := crypto.GeneratePrivateKey()
 	if err != nil {
 		t.Fatalf("❌ Failed to generate private key: %v", err)
 	} else {
@@ -72,7 +83,7 @@ func TestValidateEvent(t *testing.T) {
 	}
 
 	// Get the public key
-	pubKey := hex.EncodeToString(privateKey.PubKey().SerializeCompressed()[1:])
+	pubKey := crypto.GetPublicKey(privateKey)
 
 	// Create a test event
 	event := &Event{
@@ -83,29 +94,41 @@ func TestValidateEvent(t *testing.T) {
 		Content:   "Hello, world!",
 	}
 
+	// Convert to crypto.Event for ID computation
+	cryptoEvent := &crypto.Event{
+		PubKey:    event.PubKey,
+		CreatedAt: event.CreatedAt,
+		Kind:      event.Kind,
+		Tags:      event.Tags,
+		Content:   event.Content,
+	}
+
 	// Compute the ID
-	id, err := computeEventID(event)
+	id, err := crypto.ComputeEventID(cryptoEvent)
 	if err != nil {
 		t.Fatalf("❌ Failed to compute event ID: %v", err)
 	} else {
 		fmt.Println("✅ Computed event ID successfully")
 	}
 	event.ID = id
+	cryptoEvent.ID = id
 
 	// Sign the event
-	idBytes, err := hex.DecodeString(id)
+	idBytes, err := crypto.DecodeID(id)
 	if err != nil {
 		t.Fatalf("❌ Failed to decode ID: %v", err)
 	} else {
 		fmt.Println("✅ Decoded event ID successfully")
 	}
-	sig, err := schnorr.Sign(privateKey, idBytes)
+	
+	signature, err := crypto.SignEvent(cryptoEvent, privateKey)
 	if err != nil {
 		t.Fatalf("❌ Failed to sign event: %v", err)
 	} else {
 		fmt.Println("✅ Signed event successfully")
 	}
-	event.Sig = hex.EncodeToString(sig.Serialize())
+	event.Sig = signature
+	cryptoEvent.Sig = signature
 
 	// Validate the event
 	err = validateEvent(event)
