@@ -14,14 +14,18 @@ import (
 
 	"github.com/btcsuite/btcd/btcec/v2"
 	"github.com/btcsuite/btcd/btcec/v2/schnorr"
+	"github.com/gareth/go-nostr-relay/lib/utils"
 	"github.com/gorilla/websocket"
 )
+
+var clientLogger = utils.NewLogger("client")
 
 // NostrClient represents a client for interacting with a Nostr relay
 type NostrClient struct {
 	conn       *websocket.Conn
 	privateKey *btcec.PrivateKey
 	publicKey  string
+	relayURL   string
 }
 
 // Event represents a Nostr event
@@ -84,6 +88,7 @@ func NewNostrClient(relayURL string) (*NostrClient, error) {
 		conn:       conn,
 		privateKey: privateKey,
 		publicKey:  publicKey,
+		relayURL:   relayURL,
 	}, nil
 }
 
@@ -127,6 +132,7 @@ func NewNostrClientWithKey(relayURL string, hexPrivateKey string) (*NostrClient,
 		conn:       conn,
 		privateKey: privateKey,
 		publicKey:  publicKey,
+		relayURL:   relayURL,
 	}, nil
 }
 
@@ -202,108 +208,157 @@ func (c *NostrClient) PublishEvent(kind int, content string, tags [][]string) (*
 }
 
 // PublishExistingEvent publishes an existing event to the relay
-func (c *NostrClient) PublishExistingEvent(event *Event) error {
-	// Create the EVENT message - make sure it's properly formatted for the Nostr protocol
+func (c *NostrClient) PublishExistingEvent(event *Event) (bool, string, error) {
+	// Construct the JSON-RPC message for publishing an event
 	message := []interface{}{"EVENT", event}
-
-	// Debug format of the event
-	eventJSON, _ := json.Marshal(event)
-	fmt.Printf("🔍 DEBUG: Sending event to relay: %s\n", string(eventJSON))
-
-	// Send the message to the relay
-	if err := c.conn.WriteJSON(message); err != nil {
-		return fmt.Errorf("failed to send event to relay: %w", err)
+	
+	// Marshal the message
+	data, err := json.Marshal(message)
+	if err != nil {
+		return false, "", fmt.Errorf("failed to marshal message: %v", err)
 	}
-
-	// Set read timeout to ensure we don't hang indefinitely
-	c.conn.SetReadDeadline(time.Now().Add(5 * time.Second))
-	defer c.conn.SetReadDeadline(time.Time{}) // Reset deadline
-
-	// Wait for and process responses from the relay
-	// We need to keep checking for messages until we get an OK or an error for our event
+	
+	clientLogger.Debug("🔍 DEBUG: Sending event to relay: %s", string(data))
+	
+	// Send the message
+	err = c.conn.WriteMessage(websocket.TextMessage, data)
+	if err != nil {
+		return false, "", fmt.Errorf("failed to send message: %v", err)
+	}
+	
+	// Wait for response (we expect an "OK" message or an "ERROR" message)
+	responseType := ""
+	success := false
+	errorMessage := ""
+	
+	// Define a timeout for waiting for a response
+	const responseTimeout = 5 * time.Second
+	c.conn.SetReadDeadline(time.Now().Add(responseTimeout))
+	
+	// Read and process messages until we get OK or ERROR
 	for {
-		_, messageBytes, err := c.conn.ReadMessage()
+		_, msg, err := c.conn.ReadMessage()
 		if err != nil {
-			if websocket.IsCloseError(err, websocket.CloseNormalClosure, websocket.CloseGoingAway) {
-				return fmt.Errorf("connection closed by relay: %w", err)
-			}
 			if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
-				return fmt.Errorf("timeout waiting for relay response: %w", err)
+				return false, "timeout waiting for relay response", nil
 			}
-			return fmt.Errorf("error reading relay response: %w", err)
+			return false, "", fmt.Errorf("failed to read response: %v", err)
 		}
-
-		fmt.Printf("🔍 DEBUG: Received relay response: %s\n", string(messageBytes))
-
+		
+		clientLogger.Debug("🔍 DEBUG: Received relay response: %s", string(msg))
+		
 		// Parse the response
 		var response []json.RawMessage
-		if err := json.Unmarshal(messageBytes, &response); err != nil {
-			// This might not be a response to our event, try to continue
-			fmt.Printf("🔍 DEBUG: Error parsing response: %v\n", err)
+		if err := json.Unmarshal(msg, &response); err != nil {
+			clientLogger.Warn("Failed to parse relay response: %v", err)
 			continue
 		}
-
-		// Check if message is properly formatted
+		
+		// Check if it's too short to be a valid response
 		if len(response) < 2 {
-			fmt.Printf("🔍 DEBUG: Skipping response with too few elements\n")
-			continue // Not our response, continue waiting
-		}
-
-		// Get the message type (NOTICE, OK, EVENT, etc.)
-		var messageType string
-		if err := json.Unmarshal(response[0], &messageType); err != nil {
-			fmt.Printf("🔍 DEBUG: Error parsing message type: %v\n", err)
-			continue // Not a valid message, continue waiting
-		}
-
-		// Debug the message type
-		fmt.Printf("🔍 DEBUG: Message type: %s\n", messageType)
-
-		// If it's a NOTICE, just log it
-		if messageType == "NOTICE" {
-			var notice string
-			if len(response) >= 2 {
-				json.Unmarshal(response[1], &notice)
-				fmt.Printf("🔍 NOTICE from relay: %s\n", notice)
-			}
-			continue // Keep waiting for OK
-		}
-
-		// If it's OK, check if it's for our event
-		if messageType == "OK" {
-			// Check if it has the event ID we sent
-			if len(response) >= 2 {
-				var respEventID string
-				if err := json.Unmarshal(response[1], &respEventID); err == nil {
-					if respEventID == event.ID {
-						fmt.Printf("✅ Event %s was accepted by relay\n", event.ID)
-						return nil // Success!
-					}
-				}
-			}
-			// Not our event, continue waiting
+			clientLogger.Warn("Invalid response format (too short)")
 			continue
 		}
-
-		// If we get an error related to our event
-		if messageType == "OK" && len(response) >= 3 {
-			var respEventID string
-			var success bool
-			var reason string
+		
+		// Extract the message type
+		var msgType string
+		if err := json.Unmarshal(response[0], &msgType); err != nil {
+			clientLogger.Warn("Failed to parse message type: %v", err)
+			continue
+		}
+		
+		clientLogger.Debug("🔍 DEBUG: Message type: %s", msgType)
+		
+		// Process different message types
+		switch msgType {
+		case "OK":
+			// OK message format: ["OK", <event_id>, <success>, <message>]
+			if len(response) < 4 {
+				clientLogger.Warn("Invalid OK response format")
+				continue
+			}
 			
-			if err := json.Unmarshal(response[1], &respEventID); err == nil {
-				if respEventID == event.ID {
-					json.Unmarshal(response[2], &success)
-					if !success && len(response) >= 4 {
-						json.Unmarshal(response[3], &reason)
-						return fmt.Errorf("relay rejected event: %s", reason)
-					}
+			// Extract the event ID
+			var eventID string
+			if err := json.Unmarshal(response[1], &eventID); err != nil {
+				clientLogger.Warn("Failed to parse event ID: %v", err)
+				continue
+			}
+			
+			// Check if it matches our event
+			if eventID != event.ID {
+				clientLogger.Warn("Event ID mismatch: %s vs %s", eventID, event.ID)
+				continue
+			}
+			
+			// Extract the success status
+			if err := json.Unmarshal(response[2], &success); err != nil {
+				clientLogger.Warn("Failed to parse success status: %v", err)
+				continue
+			}
+			
+			// Extract the message if there is one
+			if len(response) >= 4 {
+				if err := json.Unmarshal(response[3], &errorMessage); err != nil {
+					clientLogger.Warn("Failed to parse error message: %v", err)
 				}
 			}
+			
+			responseType = "OK"
+			break
+			
+		case "EVENT":
+			// This is an event from the relay, not a response to our publish
+			clientLogger.Debug("Received EVENT message, continuing to wait for OK/ERROR")
+			continue
+			
+		case "NOTICE":
+			// This is a notice from the relay
+			if len(response) >= 2 {
+				var notice string
+				if err := json.Unmarshal(response[1], &notice); err != nil {
+					clientLogger.Warn("Failed to parse notice: %v", err)
+				} else {
+					clientLogger.Info("Received NOTICE: %s", notice)
+				}
+			}
+			continue
+			
+		case "ERROR":
+			// ERROR message format: ["ERROR", <error_message>]
+			if len(response) >= 2 {
+				if err := json.Unmarshal(response[1], &errorMessage); err != nil {
+					clientLogger.Warn("Failed to parse error message: %v", err)
+				}
+			}
+			success = false
+			responseType = "ERROR"
+			break
+			
+		default:
+			// Unknown message type
+			clientLogger.Warn("Unknown message type: %s", msgType)
+			continue
 		}
-
-		// If we've been waiting too long, abort (this is a safety measure)
-		// Continue looping to wait for more messages
+		
+		// If we got a proper response, break out of the loop
+		if responseType == "OK" || responseType == "ERROR" {
+			break
+		}
+	}
+	
+	// Reset the read deadline
+	c.conn.SetReadDeadline(time.Time{})
+	
+	if responseType == "OK" && success {
+		clientLogger.Info("✅ Event %s was accepted by relay", event.ID)
+		return true, "", nil
+	} else {
+		if errorMessage == "" {
+			errorMessage = "relay returned non-success status"
+		}
+		clientLogger.Warn("❌ Event %s was rejected by relay: %s", event.ID, errorMessage)
+		return false, errorMessage, nil
 	}
 }
 
@@ -363,6 +418,41 @@ func (c *NostrClient) publishEvent(event *Event) error {
 // GetPublicKey returns the client's public key
 func (c *NostrClient) GetPublicKey() string {
 	return c.publicKey
+}
+
+// Connect establishes a WebSocket connection to the Nostr relay
+func (c *NostrClient) Connect() error {
+	clientLogger.Info("🔌 Connecting to relay: %s", c.relayURL)
+	
+	// Parse the relay URL
+	u, err := url.Parse(c.relayURL)
+	if err != nil {
+		return fmt.Errorf("invalid relay URL: %w", err)
+	}
+	
+	// Ensure the WebSocket scheme is used
+	switch u.Scheme {
+	case "http":
+		u.Scheme = "ws"
+	case "https":
+		u.Scheme = "wss"
+	case "ws", "wss":
+		// Already using WebSocket scheme
+	default:
+		return fmt.Errorf("unsupported URL scheme: %s", u.Scheme)
+	}
+	
+	// Connect to the WebSocket endpoint
+	clientLogger.Debug("Dialing WebSocket: %s", u.String())
+	conn, _, err := websocket.DefaultDialer.Dial(u.String(), nil)
+	if err != nil {
+		return fmt.Errorf("failed to connect to relay: %w", err)
+	}
+	
+	c.conn = conn
+	clientLogger.Info("✅ Connected to relay: %s", c.relayURL)
+	
+	return nil
 }
 
 // generatePrivateKey generates a new random private key
@@ -561,4 +651,133 @@ func truncateString(s string, length int) string {
 		return s
 	}
 	return s[:length]
+}
+
+// Subscribe subscribes to events from the relay based on the provided filters
+func (c *NostrClient) Subscribe(filters []map[string]interface{}, eventHandler func(*Event)) (string, error) {
+	// Generate a random subscription ID
+	subscriptionID := generateSubscriptionID()
+	clientLogger.Info("📩 Subscribing to events with ID: %s", subscriptionID)
+	
+	// Construct the REQ message
+	message := append([]interface{}{"REQ", subscriptionID}, filtersToInterfaces(filters)...)
+	
+	// Marshal the message to JSON for debug logging
+	jsonMsg, _ := json.Marshal(message)
+	clientLogger.Debug("Sending subscription: %s", string(jsonMsg))
+	
+	// Send the REQ message
+	if err := c.conn.WriteJSON(message); err != nil {
+		return "", fmt.Errorf("failed to send subscription request: %w", err)
+	}
+	
+	// Start a goroutine to handle incoming events for this subscription
+	go func() {
+		for {
+			// Read the next message
+			_, msgBytes, err := c.conn.ReadMessage()
+			if err != nil {
+				clientLogger.Error("Error reading from websocket: %v", err)
+				return
+			}
+			
+			// Attempt to unmarshal the message
+			var msg []json.RawMessage
+			if err := json.Unmarshal(msgBytes, &msg); err != nil {
+				clientLogger.Warn("Failed to parse message: %v", err)
+				continue
+			}
+			
+			// Check if the message is well-formed
+			if len(msg) < 2 {
+				clientLogger.Warn("Received malformed message with too few elements")
+				continue
+			}
+			
+			// Get the message type
+			var msgType string
+			if err := json.Unmarshal(msg[0], &msgType); err != nil {
+				clientLogger.Warn("Failed to parse message type: %v", err)
+				continue
+			}
+			
+			// Handle different message types
+			switch msgType {
+			case "EVENT":
+				// Check if this is for our subscription
+				var eventSubID string
+				if err := json.Unmarshal(msg[1], &eventSubID); err != nil {
+					clientLogger.Warn("Failed to parse subscription ID: %v", err)
+					continue
+				}
+				
+				if eventSubID != subscriptionID {
+					// Not for our subscription
+					continue
+				}
+				
+				if len(msg) < 3 {
+					clientLogger.Warn("Malformed EVENT message, missing event data")
+					continue
+				}
+				
+				// Parse the event
+				var event Event
+				if err := json.Unmarshal(msg[2], &event); err != nil {
+					clientLogger.Warn("Failed to parse event: %v", err)
+					continue
+				}
+				
+				clientLogger.Debug("📦 Received event: %s", event.ID)
+				
+				// Call the event handler
+				eventHandler(&event)
+				
+			case "EOSE":
+				// End of stored events
+				var eoseSubID string
+				if err := json.Unmarshal(msg[1], &eoseSubID); err != nil {
+					clientLogger.Warn("Failed to parse EOSE subscription ID: %v", err)
+					continue
+				}
+				
+				if eoseSubID == subscriptionID {
+					clientLogger.Info("🏁 End of stored events for subscription: %s", subscriptionID)
+				}
+				
+			case "NOTICE":
+				if len(msg) >= 2 {
+					var notice string
+					if err := json.Unmarshal(msg[1], &notice); err != nil {
+						clientLogger.Warn("Failed to parse notice: %v", err)
+					} else {
+						clientLogger.Info("📢 NOTICE from relay: %s", notice)
+					}
+				}
+				
+			default:
+				// Unknown message type
+				clientLogger.Debug("Received unknown message type: %s", msgType)
+			}
+		}
+	}()
+	
+	return subscriptionID, nil
+}
+
+// Helper function to convert filter maps to interfaces for the REQ message
+func filtersToInterfaces(filters []map[string]interface{}) []interface{} {
+	result := make([]interface{}, len(filters))
+	for i, filter := range filters {
+		result[i] = filter
+	}
+	return result
+}
+
+// Helper function to generate a random subscription ID
+func generateSubscriptionID() string {
+	// Generate 16 random bytes
+	bytes := make([]byte, 16)
+	rand.Read(bytes)
+	return hex.EncodeToString(bytes)
 }

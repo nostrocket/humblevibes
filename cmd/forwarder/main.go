@@ -3,7 +3,6 @@ package main
 import (
 	"flag"
 	"fmt"
-	"log"
 	"os"
 	"os/signal"
 	"strings"
@@ -12,7 +11,10 @@ import (
 	"time"
 
 	"github.com/gareth/go-nostr-relay/client"
+	"github.com/gareth/go-nostr-relay/lib/utils"
 )
+
+var forwarderLogger = utils.NewLogger("forwarder")
 
 // Config holds the forwarder configuration
 type Config struct {
@@ -26,7 +28,7 @@ type Config struct {
 }
 
 func main() {
-	// Parse command line flags
+	// Parse command-line flags
 	targetRelay := flag.String("target", "ws://localhost:8080/ws", "Target relay URL to forward events to")
 	sourceRelays := flag.String("sources", "", "Comma-separated list of source relay URLs to subscribe to")
 	kinds := flag.String("kinds", "1", "Comma-separated list of event kinds to forward (e.g., '1,4,7')")
@@ -43,7 +45,9 @@ func main() {
 
 	// Validate source relays
 	if *sourceRelays == "" {
-		log.Fatal("No source relays specified. Use -sources flag to provide relay URLs.")
+		forwarderLogger.Error("No source relays specified. Use -sources flag to provide relay URLs.")
+		flag.Usage()
+		os.Exit(1)
 	}
 
 	// Parse kinds
@@ -74,7 +78,7 @@ func main() {
 			// Convert to hex if it's a bech32 key
 			hexPk, err := client.ConvertBech32PubkeyToHex(pk)
 			if err != nil {
-				log.Printf("Warning: Invalid pubkey format for %s: %v", pk, err)
+				forwarderLogger.Warn("Warning: Invalid pubkey format for %s: %v", pk, err)
 				continue
 			}
 			
@@ -106,23 +110,23 @@ func main() {
 	}
 
 	// Print configuration
-	log.Printf("Nostr Event Forwarder")
-	log.Printf("Target relay: %s", config.TargetRelay)
-	log.Printf("Source relays: %v", config.SourceRelays)
-	log.Printf("Event kinds: %v", kindsList)
+	forwarderLogger.Info("Nostr Event Forwarder")
+	forwarderLogger.Info("Target relay: %s", config.TargetRelay)
+	forwarderLogger.Info("Source relays: %v", config.SourceRelays)
+	forwarderLogger.Info("Event kinds: %v", kindsList)
 	if *pubkeys != "" {
 		if authors, ok := config.Filters["authors"].([]string); ok && len(authors) > 0 {
-			log.Printf("Filtering by authors: %v", authors)
+			forwarderLogger.Info("Filtering by authors: %v", authors)
 		}
 	}
 	if *since > 0 {
-		log.Printf("Since: %v (%s)", *since, time.Unix(*since, 0).Format(time.RFC3339))
+		forwarderLogger.Info("Since: %v (%s)", *since, time.Unix(*since, 0).Format(time.RFC3339))
 	}
 	if *until > 0 {
-		log.Printf("Until: %v (%s)", *until, time.Unix(*until, 0).Format(time.RFC3339))
+		forwarderLogger.Info("Until: %v (%s)", *until, time.Unix(*until, 0).Format(time.RFC3339))
 	}
-	log.Printf("Batch size: %d", config.BatchSize)
-	log.Printf("Skip old events: %v", config.SkipOld)
+	forwarderLogger.Info("Batch size: %d", config.BatchSize)
+	forwarderLogger.Info("Skip old events: %v", config.SkipOld)
 
 	// Start the forwarder
 	forwarder := NewForwarder(config)
@@ -134,9 +138,9 @@ func main() {
 	<-sigChan
 
 	// Shutdown
-	log.Println("Shutting down forwarder...")
+	forwarderLogger.Info("Shutting down forwarder...")
 	forwarder.Stop()
-	log.Println("Forwarder shutdown complete")
+	forwarderLogger.Info("Forwarder shutdown complete")
 }
 
 // Forwarder handles subscribing to source relays and forwarding events to the target relay
@@ -164,14 +168,15 @@ func (f *Forwarder) Start() {
 	var err error
 	f.targetClient, err = client.NewNostrClient(f.config.TargetRelay)
 	if err != nil {
-		log.Fatalf("Failed to connect to target relay: %v", err)
+		forwarderLogger.Error("Failed to connect to target relay: %v", err)
+		os.Exit(1)
 	}
 
 	// Connect to source relays
 	for _, relayURL := range f.config.SourceRelays {
 		sourceClient, err := client.NewNostrClient(relayURL)
 		if err != nil {
-			log.Printf("Failed to connect to source relay %s: %v", relayURL, err)
+			forwarderLogger.Warn("Failed to connect to source relay %s: %v", relayURL, err)
 			continue
 		}
 		f.sourceClients = append(f.sourceClients, sourceClient)
@@ -185,7 +190,7 @@ func (f *Forwarder) Start() {
 	f.wg.Add(1)
 	go f.processEvents()
 
-	log.Printf("Forwarder started with %d source relays", len(f.sourceClients))
+	forwarderLogger.Info("Forwarder started with %d source relays", len(f.sourceClients))
 }
 
 // Stop disconnects from relays and stops forwarding
@@ -226,92 +231,101 @@ func (f *Forwarder) subscribeToRelay(sourceClient *client.NostrClient, relayURL 
 	// Subscribe to events
 	err := sourceClient.SubscribeToEventsWithHandler(subID, f.config.Filters, eventHandler)
 	if err != nil {
-		log.Printf("Failed to subscribe to events from %s: %v", relayURL, err)
+		forwarderLogger.Warn("Failed to subscribe to events from %s: %v", relayURL, err)
 		return
 	}
 
-	log.Printf("Subscribed to events from %s", relayURL)
+	forwarderLogger.Info("Subscribed to events from %s", relayURL)
 
 	// Wait for stop signal
 	<-f.stopChan
-	log.Printf("Unsubscribing from %s", relayURL)
+	forwarderLogger.Info("Unsubscribing from %s", relayURL)
 }
 
 // processEvents processes events from the queue and forwards them to the target relay
 func (f *Forwarder) processEvents() {
 	defer f.wg.Done()
-
-	// Change to process one event at a time instead of batching
-	ticker := time.NewTicker(500 * time.Millisecond)
-	defer ticker.Stop()
-
+	
+	// Create a buffer to accumulate events for batch forwarding
+	batch := make([]*client.Event, 0, f.config.BatchSize)
+	lastForwardTime := time.Now()
+	
 	for {
 		select {
+		case <-f.stopChan:
+			// Flush any remaining events before stopping
+			if len(batch) > 0 {
+				f.forwardEvents(batch)
+			}
+			return
+			
 		case event := <-f.events:
-			// Print event if requested
+			// Handle a new event
 			if f.config.PrintEvents {
-				fmt.Printf("\n📥 RECEIVED EVENT\n  🆔 ID: %s\n  👤 Author: %s\n  🏷️  Kind: %d\n  🕒 Created: %s\n  📝 Content: %s\n",
-					truncateString(event.ID, 16),
-					truncateString(event.PubKey, 16),
-					event.Kind,
-					time.Unix(event.CreatedAt, 0).Format(time.RFC3339),
-					event.Content)
+				content := event.Content
+				if len(content) > 40 {
+					content = content[:40] + "..."
+				}
+				forwarderLogger.Info("🔔 Received event: kind=%d, content=%s", event.Kind, content)
 			}
 			
-			// Process each event individually immediately rather than batching
-			f.forwardEvents([]*client.Event{event})
-
-		case <-ticker.C:
-			// Just keep the ticker for clean event loop
-
-		case <-f.stopChan:
-			// Clean shutdown
-			return
+			// Log event ID
+			forwarderLogger.Info("✅ Collected event ID: %s...", truncateString(event.ID, 5))
+			
+			// Add to the current batch
+			batch = append(batch, event)
+			
+			// Forward events when batch is full or timeout occurred
+			if len(batch) >= f.config.BatchSize || time.Since(lastForwardTime) > 5*time.Second {
+				f.forwardEvents(batch)
+				batch = batch[:0] // Clear the batch
+				lastForwardTime = time.Now()
+			}
 		}
 	}
 }
 
 // forwardEvents forwards a batch of events to the target relay
 func (f *Forwarder) forwardEvents(events []*client.Event) {
-	log.Printf("[%s] Forwarding %d events to target relay", time.Now().Format("15:04:05.000"), len(events))
+	if len(events) == 0 {
+		return
+	}
 
-	// Forward each event individually rather than as a batch
+	forwarderLogger.Info("Forwarding %d events to target relay", len(events))
+
 	for _, event := range events {
 		// Skip events that are too old (older than 24 hours) if configured to do so
 		if f.config.SkipOld && time.Now().Unix()-event.CreatedAt > 86400 {
-			log.Printf("[%s] Skipping old event from %s", 
-				time.Now().Format("15:04:05.000"),
+			forwarderLogger.Info("Skipping old event from %s", 
 				time.Unix(event.CreatedAt, 0).Format(time.RFC3339))
 			continue
 		}
 
-		if f.config.LogEvents {
-			// Log event details
+		// Print the event details if configured
+		if f.config.PrintEvents || f.config.LogEvents {
 			content := event.Content
-			if len(content) > 50 {
-				content = content[:47] + "..."
+			if len(content) > 40 {
+				content = content[:40] + "..."
 			}
-			log.Printf("[%s] Event: kind=%d, author=%s, content=%s", 
-				time.Now().Format("15:04:05.000"),
+			forwarderLogger.Info("Event: kind=%d, author=%s, content=%s", 
 				event.Kind, 
 				event.PubKey[:8], 
 				content)
 		}
 
 		// Forward the event to the target relay
-		err := f.targetClient.PublishExistingEvent(event)
+		success, errMsg, err := f.targetClient.PublishExistingEvent(event)
 		if err != nil {
-			log.Printf("[%s] ❌ Failed to forward event: %v", 
-				time.Now().Format("15:04:05.000"), 
-				err)
+			forwarderLogger.Error("Failed to forward event: %v", err)
+		} else if !success {
+			forwarderLogger.Error("Relay rejected event: %s", errMsg) 
 		} else {
-			log.Printf("[%s] ✅ Successfully forwarded event ID: %s", 
-				time.Now().Format("15:04:05.000"), 
+			forwarderLogger.Info("✅ Successfully forwarded event ID: %s", 
 				truncateString(event.ID, 16))
 		}
 		
 		// Add a small delay between events to prevent overwhelming the relay
-		time.Sleep(100 * time.Millisecond)
+		time.Sleep(50 * time.Millisecond)
 	}
 }
 

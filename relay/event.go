@@ -8,7 +8,10 @@ import (
 	"time"
 
 	"github.com/gareth/go-nostr-relay/lib/crypto"
+	"github.com/gareth/go-nostr-relay/lib/utils"
 )
+
+var relayLogger = utils.NewLogger("relay")
 
 // Event represents a Nostr event
 type Event struct {
@@ -90,24 +93,24 @@ func (c *Client) handleEvent(msg []json.RawMessage) {
 // validateEvent validates a Nostr event
 func validateEvent(event *Event) error {
 	// Extra debug logging
-	fmt.Printf("🧪 Validating event ID: %s\n", event.ID)
-	fmt.Printf("  👤 Author: %s\n", event.PubKey)
-	fmt.Printf("  🕒 Created: %d\n", event.CreatedAt)
-	fmt.Printf("  🏷️  Kind: %d\n", event.Kind)
+	relayLogger.Info("🧪 Validating event ID: %s", event.ID)
+	relayLogger.Info("  👤 Author: %s", event.PubKey)
+	relayLogger.Info("  🕒 Created: %d", event.CreatedAt)
+	relayLogger.Info("  🏷️  Kind: %d", event.Kind)
 	
 	// Check required fields
 	if event.PubKey == "" {
-		fmt.Println("❌ Missing pubkey")
+		relayLogger.Error("❌ Missing pubkey")
 		return errors.New("missing pubkey")
 	}
 	
 	if event.CreatedAt == 0 {
-		fmt.Println("❌ Missing created_at")
+		relayLogger.Error("❌ Missing created_at")
 		return errors.New("missing created_at")
 	}
 	
 	if event.Sig == "" {
-		fmt.Println("❌ Missing sig")
+		relayLogger.Error("❌ Missing sig")
 		return errors.New("missing sig")
 	}
 	
@@ -122,27 +125,27 @@ func validateEvent(event *Event) error {
 	
 	computedID, err := crypto.ComputeEventID(cryptoEvent)
 	if err != nil {
-		fmt.Printf("❌ Failed to compute event ID: %v\n", err)
+		relayLogger.Error("❌ Failed to compute event ID: %v", err)
 		return fmt.Errorf("failed to compute event ID: %v", err)
 	}
 	
 	// Verify the event ID
 	if computedID != event.ID {
-		fmt.Printf("❌ ID mismatch: computed=%s vs. provided=%s\n", computedID, event.ID)
+		relayLogger.Error("❌ ID mismatch: computed=%s vs. provided=%s", computedID, event.ID)
 		return fmt.Errorf("event ID mismatch")
 	}
-	fmt.Println("✅ Event ID valid")
+	relayLogger.Info("✅ Event ID valid")
 	
 	// Verify the signature
 	cryptoEvent.ID = event.ID
 	cryptoEvent.Sig = event.Sig
 	if err := crypto.VerifySignature(cryptoEvent); err != nil {
-		fmt.Printf("❌ Signature verification failed: %v\n", err)
+		relayLogger.Error("❌ Signature verification failed: %v", err)
 		return fmt.Errorf("signature verification failed: %v", err)
 	}
-	fmt.Println("✅ Signature valid")
+	relayLogger.Info("✅ Signature valid")
 	
-	fmt.Println("✅ Event validated successfully")
+	relayLogger.Info("✅ Event validated successfully")
 	return nil
 }
 

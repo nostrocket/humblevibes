@@ -2,14 +2,16 @@ package relay
 
 import (
 	"encoding/hex"
-	"fmt"
 	"testing"
 
 	"github.com/gareth/go-nostr-relay/lib/crypto"
+	"github.com/gareth/go-nostr-relay/lib/utils"
 )
 
+var testLogger = utils.NewLogger("relay.test")
+
 func TestComputeEventID(t *testing.T) {
-	fmt.Println("🧪 Test: ComputeEventID")
+	testLogger.TestInfo("🧪 Test: ComputeEventID")
 	// Create a test event
 	event := &Event{
 		PubKey:    "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
@@ -33,14 +35,14 @@ func TestComputeEventID(t *testing.T) {
 	if err != nil {
 		t.Fatalf("❌ Failed to compute event ID: %v", err)
 	} else {
-		fmt.Println("✅ Computed event ID successfully")
+		testLogger.TestInfo("✅ Computed event ID successfully")
 	}
 
 	// Verify the ID is a valid 32-byte hex string
 	if len(id) != 64 {
 		t.Errorf("❌ Expected ID length of 64 characters, got %d", len(id))
 	} else {
-		fmt.Println("✅ Event ID has correct length (64)")
+		testLogger.TestInfo("✅ Event ID has correct length (64)")
 	}
 
 	// Try to decode the ID as hex
@@ -48,7 +50,7 @@ func TestComputeEventID(t *testing.T) {
 	if err != nil {
 		t.Errorf("❌ ID is not a valid hex string: %v", err)
 	} else {
-		fmt.Println("✅ Event ID is a valid hex string")
+		testLogger.TestInfo("✅ Event ID is a valid hex string")
 	}
 
 	// Set the ID on the event
@@ -60,24 +62,24 @@ func TestComputeEventID(t *testing.T) {
 	if err != nil {
 		t.Fatalf("❌ Failed to compute event ID second time: %v", err)
 	} else {
-		fmt.Println("✅ Computed event ID again successfully")
+		testLogger.TestInfo("✅ Computed event ID again successfully")
 	}
 
 	if id != id2 {
 		t.Errorf("❌ ID computation is not deterministic: %s != %s", id, id2)
 	} else {
-		fmt.Println("✅ Event ID computation is deterministic")
+		testLogger.TestInfo("✅ Event ID computation is deterministic")
 	}
 }
 
 func TestValidateEvent(t *testing.T) {
-	fmt.Println("🧪 Test: ValidateEvent")
+	testLogger.TestInfo("🧪 Test: ValidateEvent")
 	// Create a private key for testing
 	privateKey, err := crypto.GeneratePrivateKey()
 	if err != nil {
 		t.Fatalf("❌ Failed to generate private key: %v", err)
 	} else {
-		fmt.Println("✅ Generated private key successfully")
+		testLogger.TestInfo("✅ Generated private key successfully")
 	}
 
 	// Get the public key
@@ -106,7 +108,7 @@ func TestValidateEvent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("❌ Failed to compute event ID: %v", err)
 	} else {
-		fmt.Println("✅ Computed event ID successfully")
+		testLogger.TestInfo("✅ Computed event ID successfully")
 	}
 	event.ID = id
 	cryptoEvent.ID = id
@@ -116,7 +118,7 @@ func TestValidateEvent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("❌ Failed to sign event: %v", err)
 	} else {
-		fmt.Println("✅ Signed event successfully")
+		testLogger.TestInfo("✅ Signed event successfully")
 	}
 	event.Sig = signature
 	cryptoEvent.Sig = signature
@@ -126,7 +128,7 @@ func TestValidateEvent(t *testing.T) {
 	if err != nil {
 		t.Errorf("❌ Event validation failed: %v", err)
 	} else {
-		fmt.Println("✅ Event validation succeeded")
+		testLogger.TestInfo("✅ Event validation succeeded")
 	}
 
 	// Test validation with missing fields
@@ -182,7 +184,7 @@ func TestValidateEvent(t *testing.T) {
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
-			fmt.Printf("🧪 Test case: %s\n", tc.name)
+			testLogger.TestInfo("🧪 Test case: %s", tc.name)
 			// Create a copy of the valid event
 			testEvent := &Event{
 				ID:        event.ID,
@@ -204,20 +206,20 @@ func TestValidateEvent(t *testing.T) {
 			} else if !tc.expectError && err != nil {
 				t.Errorf("❌ Expected validation to succeed, but it failed: %v", err)
 			} else {
-				fmt.Println("✅ Validation result matches expectation")
+				testLogger.TestInfo("✅ Validation result matches expectation")
 			}
 		})
 	}
 }
 
 func TestVerifySignature(t *testing.T) {
-	fmt.Println("🧪 Test: VerifySignature")
+	testLogger.TestInfo("🧪 Test: VerifySignature")
 	// Create a private key for testing
 	privateKey, err := crypto.GeneratePrivateKey()
 	if err != nil {
 		t.Fatalf("❌ Failed to generate private key: %v", err)
 	} else {
-		fmt.Println("✅ Generated private key successfully")
+		testLogger.TestInfo("✅ Generated private key successfully")
 	}
 
 	// Get the public key
@@ -246,7 +248,7 @@ func TestVerifySignature(t *testing.T) {
 	if err != nil {
 		t.Fatalf("❌ Failed to compute event ID: %v", err)
 	} else {
-		fmt.Println("✅ Computed event ID successfully")
+		testLogger.TestInfo("✅ Computed event ID successfully")
 	}
 	event.ID = id
 	cryptoEvent.ID = id
@@ -256,7 +258,7 @@ func TestVerifySignature(t *testing.T) {
 	if err != nil {
 		t.Fatalf("❌ Failed to sign event: %v", err)
 	} else {
-		fmt.Println("✅ Signed event successfully")
+		testLogger.TestInfo("✅ Signed event successfully")
 	}
 	event.Sig = signature
 	cryptoEvent.Sig = signature
@@ -266,7 +268,7 @@ func TestVerifySignature(t *testing.T) {
 	if err != nil {
 		t.Errorf("❌ Signature verification failed: %v", err)
 	} else {
-		fmt.Println("✅ Signature verification succeeded")
+		testLogger.TestInfo("✅ Signature verification succeeded")
 	}
 
 	// Test with invalid signature
@@ -275,6 +277,6 @@ func TestVerifySignature(t *testing.T) {
 	if err == nil {
 		t.Errorf("❌ Expected signature verification to fail with invalid signature")
 	} else {
-		fmt.Println("✅ Signature verification failed with invalid signature")
+		testLogger.TestInfo("✅ Signature verification failed with invalid signature")
 	}
 }
