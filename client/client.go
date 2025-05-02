@@ -200,6 +200,12 @@ func (c *NostrClient) PublishEvent(kind int, content string, tags [][]string) (*
 	return event, nil
 }
 
+// PublishExistingEvent publishes an existing event to the relay
+func (c *NostrClient) PublishExistingEvent(event *Event) error {
+	// Publish the event to the relay
+	return c.publishEvent(event)
+}
+
 // publishEvent sends an event to the relay
 func (c *NostrClient) publishEvent(event *Event) error {
 	// Create the EVENT message
@@ -269,17 +275,19 @@ func getPublicKey(privateKey *btcec.PrivateKey) string {
 
 // computeEventID computes the ID of an event according to the Nostr protocol
 func computeEventID(event *Event) (string, error) {
-	// Create the event serialization
-	eventJSON := EventJSON{
-		PubKey:    event.PubKey,
-		CreatedAt: event.CreatedAt,
-		Kind:      event.Kind,
-		Tags:      event.Tags,
-		Content:   event.Content,
+	// Create a JSON array with the required fields in the specific order
+	// [0, <pubkey>, <created_at>, <kind>, <tags>, <content>]
+	eventArray := []interface{}{
+		0,
+		event.PubKey,
+		event.CreatedAt,
+		event.Kind,
+		event.Tags,
+		event.Content,
 	}
 
 	// Serialize to JSON
-	serialized, err := json.Marshal(eventJSON)
+	serialized, err := json.Marshal(eventArray)
 	if err != nil {
 		return "", err
 	}
@@ -306,6 +314,9 @@ func signEvent(event *Event, privateKey *btcec.PrivateKey) (string, error) {
 	// Return the hex-encoded signature
 	return hex.EncodeToString(sig.Serialize()), nil
 }
+
+// EventHandler is a function that handles received events
+type EventHandler func(*Event)
 
 // SubscribeToEvents subscribes to events matching the given filters
 func (c *NostrClient) SubscribeToEvents(subscriptionID string, filters map[string]interface{}) error {
@@ -356,6 +367,77 @@ func (c *NostrClient) SubscribeToEvents(subscriptionID string, filters map[strin
 
 				// Process the event
 				log.Printf("Received event: %+v", event)
+			}
+		}
+	}()
+
+	return nil
+}
+
+// SubscribeToEventsWithHandler subscribes to events matching the given filters and calls the handler for each event
+func (c *NostrClient) SubscribeToEventsWithHandler(subscriptionID string, filters map[string]interface{}, handler EventHandler) error {
+	// Create the REQ message
+	message := []interface{}{"REQ", subscriptionID, filters}
+
+	// Send the message to the relay
+	if err := c.conn.WriteJSON(message); err != nil {
+		return err
+	}
+
+	// Start a goroutine to handle incoming events
+	go func() {
+		for {
+			_, messageBytes, err := c.conn.ReadMessage()
+			if err != nil {
+				log.Printf("Error reading from relay: %v", err)
+				return
+			}
+
+			// Parse the message
+			var response []json.RawMessage
+			if err := json.Unmarshal(messageBytes, &response); err != nil {
+				log.Printf("Error parsing message: %v", err)
+				continue
+			}
+
+			// Check if the message is an EVENT message
+			if len(response) < 3 {
+				continue
+			}
+
+			var messageType string
+			if err := json.Unmarshal(response[0], &messageType); err != nil {
+				continue
+			}
+
+			if messageType == "EVENT" {
+				var subID string
+				if err := json.Unmarshal(response[1], &subID); err != nil {
+					continue
+				}
+
+				// Only process events for this subscription
+				if subID != subscriptionID {
+					continue
+				}
+
+				var event Event
+				if err := json.Unmarshal(response[2], &event); err != nil {
+					continue
+				}
+
+				// Call the handler with the event
+				handler(&event)
+			} else if messageType == "EOSE" {
+				// End of stored events
+				var subID string
+				if err := json.Unmarshal(response[1], &subID); err != nil {
+					continue
+				}
+				
+				if subID == subscriptionID {
+					log.Printf("End of stored events for subscription %s", subscriptionID)
+				}
 			}
 		}
 	}()

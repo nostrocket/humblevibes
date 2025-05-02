@@ -138,17 +138,19 @@ func verifySignature(event *Event) error {
 
 // computeEventID computes the ID of an event according to the Nostr protocol
 func computeEventID(event *Event) (string, error) {
-	// Create the event serialization
-	eventJSON := EventJSON{
-		PubKey:    event.PubKey,
-		CreatedAt: event.CreatedAt,
-		Kind:      event.Kind,
-		Tags:      event.Tags,
-		Content:   event.Content,
+	// Create a JSON array with the required fields in the specific order
+	// [0, <pubkey>, <created_at>, <kind>, <tags>, <content>]
+	eventArray := []interface{}{
+		0,
+		event.PubKey,
+		event.CreatedAt,
+		event.Kind,
+		event.Tags,
+		event.Content,
 	}
 
 	// Serialize to JSON
-	serialized, err := json.Marshal(eventJSON)
+	serialized, err := json.Marshal(eventArray)
 	if err != nil {
 		return "", err
 	}
