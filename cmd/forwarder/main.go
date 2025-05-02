@@ -21,6 +21,8 @@ type Config struct {
 	Filters      map[string]interface{}
 	BatchSize    int
 	LogEvents    bool
+	PrintEvents  bool
+	SkipOld      bool
 }
 
 func main() {
@@ -34,6 +36,9 @@ func main() {
 	limit := flag.Int("limit", 100, "Maximum number of events to request from each source relay")
 	batchSize := flag.Int("batch", 10, "Number of events to forward in a batch")
 	logEvents := flag.Bool("log", false, "Log event details when forwarding")
+	printEvents := flag.Bool("print-events", false, "Print each event received before forwarding")
+	flag.BoolVar(printEvents, "p", false, "Print each event received before forwarding (shorthand)")
+	skipOld := flag.Bool("skip-old", false, "Skip events older than 24 hours")
 	flag.Parse()
 
 	// Validate source relays
@@ -96,6 +101,8 @@ func main() {
 		Filters:      filters,
 		BatchSize:    *batchSize,
 		LogEvents:    *logEvents,
+		PrintEvents:  *printEvents,
+		SkipOld:      *skipOld,
 	}
 
 	// Print configuration
@@ -115,6 +122,7 @@ func main() {
 		log.Printf("Until: %v (%s)", *until, time.Unix(*until, 0).Format(time.RFC3339))
 	}
 	log.Printf("Batch size: %d", config.BatchSize)
+	log.Printf("Skip old events: %v", config.SkipOld)
 
 	// Start the forwarder
 	forwarder := NewForwarder(config)
@@ -233,34 +241,31 @@ func (f *Forwarder) subscribeToRelay(sourceClient *client.NostrClient, relayURL 
 func (f *Forwarder) processEvents() {
 	defer f.wg.Done()
 
-	batch := make([]*client.Event, 0, f.config.BatchSize)
-	ticker := time.NewTicker(1 * time.Second)
+	// Change to process one event at a time instead of batching
+	ticker := time.NewTicker(500 * time.Millisecond)
 	defer ticker.Stop()
 
 	for {
 		select {
 		case event := <-f.events:
-			// Add event to batch
-			batch = append(batch, event)
-
-			// Process batch if it's full
-			if len(batch) >= f.config.BatchSize {
-				f.forwardEvents(batch)
-				batch = make([]*client.Event, 0, f.config.BatchSize)
+			// Print event if requested
+			if f.config.PrintEvents {
+				fmt.Printf("\n📥 RECEIVED EVENT\n  🆔 ID: %s\n  👤 Author: %s\n  🏷️  Kind: %d\n  🕒 Created: %s\n  📝 Content: %s\n",
+					truncateString(event.ID, 16),
+					truncateString(event.PubKey, 16),
+					event.Kind,
+					time.Unix(event.CreatedAt, 0).Format(time.RFC3339),
+					event.Content)
 			}
+			
+			// Process each event individually immediately rather than batching
+			f.forwardEvents([]*client.Event{event})
 
 		case <-ticker.C:
-			// Process any remaining events in the batch
-			if len(batch) > 0 {
-				f.forwardEvents(batch)
-				batch = make([]*client.Event, 0, f.config.BatchSize)
-			}
+			// Just keep the ticker for clean event loop
 
 		case <-f.stopChan:
-			// Process any remaining events before stopping
-			if len(batch) > 0 {
-				f.forwardEvents(batch)
-			}
+			// Clean shutdown
 			return
 		}
 	}
@@ -270,9 +275,13 @@ func (f *Forwarder) processEvents() {
 func (f *Forwarder) forwardEvents(events []*client.Event) {
 	log.Printf("[%s] Forwarding %d events to target relay", time.Now().Format("15:04:05.000"), len(events))
 
+	// Forward each event individually rather than as a batch
 	for _, event := range events {
-		// Skip events that are too old
-		if time.Now().Unix()-event.CreatedAt > 86400 {
+		// Skip events that are too old (older than 24 hours) if configured to do so
+		if f.config.SkipOld && time.Now().Unix()-event.CreatedAt > 86400 {
+			log.Printf("[%s] Skipping old event from %s", 
+				time.Now().Format("15:04:05.000"),
+				time.Unix(event.CreatedAt, 0).Format(time.RFC3339))
 			continue
 		}
 
@@ -292,14 +301,17 @@ func (f *Forwarder) forwardEvents(events []*client.Event) {
 		// Forward the event to the target relay
 		err := f.targetClient.PublishExistingEvent(event)
 		if err != nil {
-			log.Printf("[%s] Failed to forward event: %v", 
+			log.Printf("[%s] ❌ Failed to forward event: %v", 
 				time.Now().Format("15:04:05.000"), 
 				err)
 		} else {
-			log.Printf("[%s] Successfully forwarded event ID: %s", 
+			log.Printf("[%s] ✅ Successfully forwarded event ID: %s", 
 				time.Now().Format("15:04:05.000"), 
 				truncateString(event.ID, 16))
 		}
+		
+		// Add a small delay between events to prevent overwhelming the relay
+		time.Sleep(100 * time.Millisecond)
 	}
 }
 

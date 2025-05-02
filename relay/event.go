@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"time"
 
 	"github.com/btcsuite/btcd/btcec/v2"
@@ -46,16 +47,40 @@ func (c *Client) handleEvent(msg []json.RawMessage) {
 		return
 	}
 
+	// Log event if verbose mode is enabled
+	if c.relay.verbose {
+		author := event.PubKey
+		if len(author) > 8 {
+			author = author[:8] + "..."
+		}
+		content := event.Content
+		if len(content) > 40 {
+			content = content[:37] + "..."
+		}
+		log.Printf("📩 Received event: ID=%s, Kind=%d, Author=%s, Content=%s", 
+			event.ID[:8]+"...", event.Kind, author, content)
+	}
+
 	// Validate the event
 	if err := validateEvent(&event); err != nil {
 		c.sendError(fmt.Sprintf("Invalid event: %v", err), "")
+		if c.relay.verbose {
+			log.Printf("❌ Event validation failed: %v", err)
+		}
 		return
 	}
 
 	// Store the event in the database
 	if err := c.relay.storeEvent(&event); err != nil {
 		c.sendError(fmt.Sprintf("Failed to store event: %v", err), "")
+		if c.relay.verbose {
+			log.Printf("❌ Failed to store event: %v", err)
+		}
 		return
+	}
+
+	if c.relay.verbose {
+		log.Printf("✅ Event stored successfully: %s", event.ID[:8]+"...")
 	}
 
 	// Broadcast the event to all clients with matching subscriptions
@@ -67,31 +92,48 @@ func (c *Client) handleEvent(msg []json.RawMessage) {
 
 // validateEvent validates a Nostr event
 func validateEvent(event *Event) error {
+	// Extra debug logging
+	fmt.Printf("🧪 Validating event ID: %s\n", event.ID)
+	fmt.Printf("  👤 Author: %s\n", event.PubKey)
+	fmt.Printf("  🕒 Created: %d\n", event.CreatedAt)
+	fmt.Printf("  🏷️  Kind: %d\n", event.Kind)
+	
 	// Check required fields
 	if event.PubKey == "" {
+		fmt.Println("❌ Missing pubkey")
 		return errors.New("missing pubkey")
 	}
 	if event.CreatedAt == 0 {
+		fmt.Println("❌ Missing created_at")
 		return errors.New("missing created_at")
 	}
 	if event.Sig == "" {
+		fmt.Println("❌ Missing sig")
 		return errors.New("missing sig")
 	}
 
 	// Validate event ID
 	computedID, err := computeEventID(event)
 	if err != nil {
+		fmt.Printf("❌ Failed to compute event ID: %v\n", err)
 		return fmt.Errorf("failed to compute event ID: %v", err)
 	}
 	if computedID != event.ID {
+		fmt.Printf("❌ ID mismatch: computed=%s vs. provided=%s\n", computedID, event.ID)
 		return errors.New("invalid event ID")
+	} else {
+		fmt.Println("✅ Event ID valid")
 	}
 
 	// Verify the signature
 	if err := verifySignature(event); err != nil {
+		fmt.Printf("❌ Signature verification failed: %v\n", err)
 		return fmt.Errorf("invalid signature: %v", err)
+	} else {
+		fmt.Println("✅ Signature valid")
 	}
 
+	fmt.Println("✅ Event validated successfully")
 	return nil
 }
 

@@ -15,10 +15,12 @@ func main() {
 	// Parse command line flags
 	port := flag.String("port", "8080", "Port to run the relay on")
 	dbPath := flag.String("db", "nostr.db", "Path to SQLite database")
+	verbose := flag.Bool("verbose", false, "Enable verbose logging of received events")
+	flag.BoolVar(verbose, "v", false, "Enable verbose logging of received events (shorthand)")
 	flag.Parse()
 
 	// Initialize the relay
-	r, err := relay.NewRelay(*dbPath)
+	r, err := relay.NewRelay(*dbPath, relay.WithVerboseLogging(*verbose))
 	if err != nil {
 		log.Fatalf("Failed to initialize relay: %v", err)
 	}

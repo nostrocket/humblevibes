@@ -18,6 +18,17 @@ type Relay struct {
 	clients   map[*Client]bool
 	clientsMu sync.Mutex
 	upgrader  websocket.Upgrader
+	verbose   bool
+}
+
+// Option is a functional option for configuring a Relay
+type Option func(*Relay)
+
+// WithVerboseLogging enables verbose logging of events
+func WithVerboseLogging(verbose bool) Option {
+	return func(r *Relay) {
+		r.verbose = verbose
+	}
 }
 
 // Client represents a connected WebSocket client
@@ -46,7 +57,7 @@ type Filter struct {
 }
 
 // NewRelay creates a new Nostr relay with the given database path
-func NewRelay(dbPath string) (*Relay, error) {
+func NewRelay(dbPath string, opts ...Option) (*Relay, error) {
 	// Open SQLite database
 	db, err := sql.Open("sqlite3", dbPath)
 	if err != nil {
@@ -71,6 +82,11 @@ func NewRelay(dbPath string) (*Relay, error) {
 		},
 	}
 
+	// Apply options
+	for _, opt := range opts {
+		opt(relay)
+	}
+
 	return relay, nil
 }
 
@@ -86,10 +102,19 @@ func (r *Relay) Close() error {
 
 // HandleWebSocket handles WebSocket connections
 func (r *Relay) HandleWebSocket(w http.ResponseWriter, req *http.Request) {
+	if r.verbose {
+		log.Printf(" New WebSocket connection from %s", req.RemoteAddr)
+	}
+	
+	// Upgrade HTTP connection to WebSocket
 	conn, err := r.upgrader.Upgrade(w, req, nil)
 	if err != nil {
 		log.Printf("Failed to upgrade connection: %v", err)
 		return
+	}
+
+	if r.verbose {
+		log.Printf(" WebSocket connection upgraded successfully for %s", req.RemoteAddr)
 	}
 
 	client := &Client{
