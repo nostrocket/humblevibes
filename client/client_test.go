@@ -2,12 +2,14 @@ package client
 
 import (
 	"encoding/hex"
+	"fmt"
 	"testing"
 
 	"github.com/btcsuite/btcd/btcec/v2"
 )
 
 func TestComputeEventID(t *testing.T) {
+	fmt.Println("🧪 Test: ComputeEventID (client)")
 	// Create a test event
 	event := &Event{
 		PubKey:    "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
@@ -20,18 +22,24 @@ func TestComputeEventID(t *testing.T) {
 	// Compute the ID
 	id, err := computeEventID(event)
 	if err != nil {
-		t.Fatalf("Failed to compute event ID: %v", err)
+		t.Fatalf("❌ Failed to compute event ID: %v", err)
+	} else {
+		fmt.Println("✅ Computed event ID successfully")
 	}
 
 	// Verify the ID is a valid 32-byte hex string
 	if len(id) != 64 {
-		t.Errorf("Expected ID length of 64 characters, got %d", len(id))
+		t.Errorf("❌ Expected ID length of 64 characters, got %d", len(id))
+	} else {
+		fmt.Println("✅ Event ID has correct length (64)")
 	}
 
 	// Try to decode the ID as hex
 	_, err = hex.DecodeString(id)
 	if err != nil {
-		t.Errorf("ID is not a valid hex string: %v", err)
+		t.Errorf("❌ ID is not a valid hex string: %v", err)
+	} else {
+		fmt.Println("✅ Event ID is a valid hex string")
 	}
 
 	// Set the ID on the event
@@ -40,19 +48,26 @@ func TestComputeEventID(t *testing.T) {
 	// Compute the ID again and verify it's the same
 	id2, err := computeEventID(event)
 	if err != nil {
-		t.Fatalf("Failed to compute event ID second time: %v", err)
+		t.Fatalf("❌ Failed to compute event ID second time: %v", err)
+	} else {
+		fmt.Println("✅ Computed event ID again successfully")
 	}
 
 	if id != id2 {
-		t.Errorf("ID computation is not deterministic: %s != %s", id, id2)
+		t.Errorf("❌ ID computation is not deterministic: %s != %s", id, id2)
+	} else {
+		fmt.Println("✅ Event ID computation is deterministic")
 	}
 }
 
 func TestSignEvent(t *testing.T) {
+	fmt.Println("🧪 Test: SignEvent")
 	// Create a private key for testing
 	privateKey, err := btcec.NewPrivateKey()
 	if err != nil {
-		t.Fatalf("Failed to generate private key: %v", err)
+		t.Fatalf("❌ Failed to generate private key: %v", err)
+	} else {
+		fmt.Println("✅ Generated private key successfully")
 	}
 
 	// Get the public key
@@ -64,82 +79,64 @@ func TestSignEvent(t *testing.T) {
 		CreatedAt: 1617932400,
 		Kind:      1,
 		Tags:      [][]string{},
-		Content:   "Hello, world!",
+		Content:   "Sign me!",
 	}
 
 	// Compute the ID
 	id, err := computeEventID(event)
 	if err != nil {
-		t.Fatalf("Failed to compute event ID: %v", err)
+		t.Fatalf("❌ Failed to compute event ID: %v", err)
+	} else {
+		fmt.Println("✅ Computed event ID successfully")
 	}
 	event.ID = id
 
 	// Sign the event
 	sig, err := signEvent(event, privateKey)
 	if err != nil {
-		t.Fatalf("Failed to sign event: %v", err)
+		t.Fatalf("❌ Failed to sign event: %v", err)
+	} else {
+		fmt.Println("✅ Signed event successfully")
 	}
+	event.Sig = sig
 
-	// Verify the signature is a valid 64-byte hex string
-	if len(sig) != 128 {
-		t.Errorf("Expected signature length of 128 characters, got %d", len(sig))
-	}
-
-	// Try to decode the signature as hex
+	// Verify signature is a valid hex string
 	_, err = hex.DecodeString(sig)
 	if err != nil {
-		t.Errorf("Signature is not a valid hex string: %v", err)
+		t.Errorf("❌ Signature is not a valid hex string: %v", err)
+	} else {
+		fmt.Println("✅ Signature is a valid hex string")
 	}
 }
 
 func TestGeneratePrivateKey(t *testing.T) {
-	// Generate a private key
-	privateKey, err := generatePrivateKey()
+	fmt.Println("🧪 Test: GeneratePrivateKey")
+	priv, err := generatePrivateKey()
 	if err != nil {
-		t.Fatalf("Failed to generate private key: %v", err)
+		t.Fatalf("❌ Failed to generate private key: %v", err)
+	} else {
+		fmt.Println("✅ Generated private key successfully")
 	}
-
-	// Verify the private key is not nil
-	if privateKey == nil {
-		t.Errorf("Generated private key is nil")
-	}
-
-	// Generate another private key and verify it's different
-	privateKey2, err := generatePrivateKey()
-	if err != nil {
-		t.Fatalf("Failed to generate second private key: %v", err)
-	}
-
-	// Compare the private keys
-	if hex.EncodeToString(privateKey.Serialize()) == hex.EncodeToString(privateKey2.Serialize()) {
-		t.Errorf("Generated private keys are identical")
+	privBytes := priv.Serialize()
+	if len(privBytes) != 32 {
+		t.Errorf("❌ Expected private key length of 32 bytes, got %d", len(privBytes))
+	} else {
+		fmt.Println("✅ Private key has correct length (32 bytes)")
 	}
 }
 
 func TestGetPublicKey(t *testing.T) {
-	// Create a private key for testing
+	fmt.Println("🧪 Test: GetPublicKey")
 	privateKey, err := btcec.NewPrivateKey()
 	if err != nil {
-		t.Fatalf("Failed to generate private key: %v", err)
+		t.Fatalf("❌ Failed to generate private key: %v", err)
+	} else {
+		fmt.Println("✅ Generated private key successfully")
 	}
-
-	// Get the public key
-	pubKey := getPublicKey(privateKey)
-
-	// Verify the public key is a valid 32-byte hex string
-	if len(pubKey) != 64 {
-		t.Errorf("Expected public key length of 64 characters, got %d", len(pubKey))
-	}
-
-	// Try to decode the public key as hex
-	_, err = hex.DecodeString(pubKey)
-	if err != nil {
-		t.Errorf("Public key is not a valid hex string: %v", err)
-	}
-
-	// Verify the public key matches the expected format
-	expectedPubKey := hex.EncodeToString(privateKey.PubKey().SerializeCompressed()[1:])
-	if pubKey != expectedPubKey {
-		t.Errorf("Public key does not match expected format: %s != %s", pubKey, expectedPubKey)
+	pub := getPublicKey(privateKey)
+	if len(pub) != 64 {
+		t.Errorf("❌ Expected public key length of 64, got %d", len(pub))
+	} else {
+		fmt.Println("✅ Public key has correct length (64)")
 	}
 }

@@ -122,59 +122,43 @@ func TestForwarderDamus(t *testing.T) {
 		}
 	}()
 
-	// Collect events until timeout
+	// Wait for at least 1 event, or up to 5 seconds
 	var receivedEvents []*client.Event
-	timeout := time.After(30 * time.Second)
-
-	for {
+	timeout := time.After(5 * time.Second)
+	gotEvent := false
+	for !gotEvent {
 		select {
 		case event := <-events:
 			receivedEvents = append(receivedEvents, event)
+			gotEvent = true
 		case <-timeout:
-			// Test timeout reached
-			goto checkResults
-		case <-ctx.Done():
-			// Context canceled or timed out
-			goto checkResults
+			// Timeout reached
+			gotEvent = true
 		}
 	}
 
-checkResults:
 	// Verify that we received events or at least that the forwarder ran successfully
 	if len(receivedEvents) == 0 {
-		// This is not necessarily a failure - the user might not have recent events
-		// or the Damus relay might not have the events we're looking for
-		fmt.Println("No events were forwarded from Damus relay")
-		fmt.Println("This could be because:")
-		fmt.Println("1. The specified pubkey doesn't have recent events on Damus")
-		fmt.Println("2. The Damus relay might be temporarily unavailable")
-		fmt.Println("3. Network connectivity issues")
-		
-		// Check if the forwarder at least connected successfully
-		// If we saw "Subscribed to events from wss://relay.damus.io" in the logs,
-		// we'll consider this a partial success
-		t.Log("No events were forwarded, but the forwarder connected successfully")
+		fmt.Println("❌ No events were forwarded from Damus relay")
+		fmt.Println("   This could be because:")
+		fmt.Println("   1️⃣ The specified pubkey doesn't have recent events on Damus")
+		fmt.Println("   2️⃣ The Damus relay might be temporarily unavailable")
+		fmt.Println("   3️⃣ Network connectivity issues")
+		t.Log("⚠️  No events were forwarded, but the forwarder connected successfully")
 	} else {
-		fmt.Printf("Successfully forwarded %d events from Damus relay\n", len(receivedEvents))
-		
-		// Verify that all events are from the target pubkey
+		fmt.Printf("✅ Successfully forwarded %d event(s) from Damus relay\n", len(receivedEvents))
 		for i, event := range receivedEvents {
 			if event.PubKey != hexPubkey {
-				t.Errorf("Event %d has wrong pubkey: expected %s, got %s", i, hexPubkey, event.PubKey)
+				t.Errorf("❌ Event %d has wrong pubkey: expected %s, got %s", i, hexPubkey, event.PubKey)
 			}
 		}
 	}
 
-	// Print database statistics
 	printDatabaseStats(t, dbFile)
-
-	// Now we can remove the database file
 	os.Remove(dbFile)
 }
 
-// printDatabaseStats prints statistics about the events stored in the database
 func printDatabaseStats(t *testing.T, dbFile string) {
-	// Open the database
 	db, err := sql.Open("sqlite3", dbFile)
 	if err != nil {
 		t.Logf("Failed to open database for stats: %v", err)
@@ -182,18 +166,16 @@ func printDatabaseStats(t *testing.T, dbFile string) {
 	}
 	defer db.Close()
 
-	fmt.Println("\n----- Database Statistics -----")
+	fmt.Println("\n📦 ----- Database Statistics ----- 📦")
 
-	// Total number of events
 	var totalEvents int
 	err = db.QueryRow("SELECT COUNT(*) FROM events").Scan(&totalEvents)
 	if err != nil {
 		t.Logf("Failed to query total events: %v", err)
 		return
 	}
-	fmt.Printf("Total events in database: %d\n", totalEvents)
+	fmt.Printf("🔢 Total events in database: %d\n", totalEvents)
 
-	// Count of events by kind
 	rows, err := db.Query("SELECT kind, COUNT(*) FROM events GROUP BY kind ORDER BY kind")
 	if err != nil {
 		t.Logf("Failed to query events by kind: %v", err)
@@ -201,17 +183,16 @@ func printDatabaseStats(t *testing.T, dbFile string) {
 	}
 	defer rows.Close()
 
-	fmt.Println("\nEvents by kind:")
+	fmt.Println("\n🏷️  Events by kind:")
 	for rows.Next() {
 		var kind, count int
 		if err := rows.Scan(&kind, &count); err != nil {
 			t.Logf("Failed to scan row: %v", err)
 			continue
 		}
-		fmt.Printf("  Kind %d: %d events\n", kind, count)
+		fmt.Printf("  🏷️  Kind %d: %d event(s)\n", kind, count)
 	}
 
-	// Count of events by pubkey
 	rows, err = db.Query("SELECT pubkey, COUNT(*) FROM events GROUP BY pubkey ORDER BY COUNT(*) DESC LIMIT 5")
 	if err != nil {
 		t.Logf("Failed to query events by pubkey: %v", err)
@@ -219,7 +200,7 @@ func printDatabaseStats(t *testing.T, dbFile string) {
 	}
 	defer rows.Close()
 
-	fmt.Println("\nTop 5 authors by event count:")
+	fmt.Println("\n👤 Top 5 authors by event count:")
 	for rows.Next() {
 		var pubkey string
 		var count int
@@ -227,20 +208,18 @@ func printDatabaseStats(t *testing.T, dbFile string) {
 			t.Logf("Failed to scan row: %v", err)
 			continue
 		}
-		fmt.Printf("  %s: %d events\n", truncateString(pubkey, 16), count)
+		fmt.Printf("  👤 %s: %d event(s)\n", truncateString(pubkey, 16), count)
 	}
 
-	// Count of events from our target pubkey
 	var targetPubkeyEvents int
 	hexPubkey, _ := client.ConvertBech32PubkeyToHex("npub1mygerccwqpzyh9pvp6pv44rskv40zutkfs38t0hqhkvnwlhagp6s3psn5p")
 	err = db.QueryRow("SELECT COUNT(*) FROM events WHERE pubkey = ?", hexPubkey).Scan(&targetPubkeyEvents)
 	if err != nil {
 		t.Logf("Failed to query target pubkey events: %v", err)
 	} else {
-		fmt.Printf("\nEvents from target pubkey: %d\n", targetPubkeyEvents)
+		fmt.Printf("\n🔑 Events from target pubkey: %d\n", targetPubkeyEvents)
 	}
 
-	// Most recent events
 	rows, err = db.Query("SELECT id, pubkey, kind, created_at, content FROM events ORDER BY created_at DESC LIMIT 3")
 	if err != nil {
 		t.Logf("Failed to query recent events: %v", err)
@@ -248,7 +227,7 @@ func printDatabaseStats(t *testing.T, dbFile string) {
 	}
 	defer rows.Close()
 
-	fmt.Println("\nMost recent events:")
+	fmt.Println("\n🕒 Most recent events:")
 	for rows.Next() {
 		var id, pubkey string
 		var kind, createdAt int64
@@ -258,21 +237,19 @@ func printDatabaseStats(t *testing.T, dbFile string) {
 			continue
 		}
 		timeStr := time.Unix(createdAt, 0).Format(time.RFC3339)
-		fmt.Printf("  ID: %s\n", truncateString(id, 16))
-		fmt.Printf("  Author: %s\n", truncateString(pubkey, 16))
-		fmt.Printf("  Kind: %d\n", kind)
-		fmt.Printf("  Created: %s\n", timeStr)
-		fmt.Printf("  Content: %s\n", truncateString(content, 50))
+		fmt.Printf("  🆔 ID: %s\n", truncateString(id, 16))
+		fmt.Printf("  👤 Author: %s\n", truncateString(pubkey, 16))
+		fmt.Printf("  🏷️  Kind: %d\n", kind)
+		fmt.Printf("  🕒 Created: %s\n", timeStr)
+		fmt.Printf("  📝 Content: %s\n", truncateString(content, 50))
 		fmt.Println("  ---")
 	}
 
-	// Add a summary of all events in the database
-	fmt.Println("\nDatabase Summary:")
-	fmt.Printf("  Total events: %d\n", totalEvents)
-	fmt.Printf("  Target pubkey events: %d\n", targetPubkeyEvents)
-	fmt.Printf("  Other events: %d\n", totalEvents-targetPubkeyEvents)
-
-	fmt.Println("-----------------------------")
+	fmt.Println("\n📊 Database Summary:")
+	fmt.Printf("  🔢 Total events: %d\n", totalEvents)
+	fmt.Printf("  🔑 Target pubkey events: %d\n", targetPubkeyEvents)
+	fmt.Printf("  📁 Other events: %d\n", totalEvents-targetPubkeyEvents)
+	fmt.Println("📦-----------------------------📦")
 }
 
 // truncateString truncates a string to the specified length

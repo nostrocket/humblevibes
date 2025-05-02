@@ -67,6 +67,7 @@ func startRelay(t *testing.T) (*exec.Cmd, context.CancelFunc) {
 
 // TestRelayAndPublisher tests the entire flow: starting relay, publishing events, and verifying storage
 func TestRelayAndPublisher(t *testing.T) {
+	fmt.Println("🧪 Test: RelayAndPublisher")
 	// Start the relay
 	cmd, cancel := startRelay(t)
 	defer func() {
@@ -76,10 +77,13 @@ func TestRelayAndPublisher(t *testing.T) {
 	
 	// Test publishing events
 	t.Run("PublishEvents", func(t *testing.T) {
+		fmt.Println("📝 Subtest: PublishEvents")
 		// Create a client
 		nostrClient, err := client.NewNostrClient(relayURL)
 		if err != nil {
-			t.Fatalf("Failed to create client: %v", err)
+			t.Fatalf("❌ Failed to create client: %v", err)
+		} else {
+			fmt.Println("✅ Created client successfully")
 		}
 		defer nostrClient.Close()
 		
@@ -87,76 +91,85 @@ func TestRelayAndPublisher(t *testing.T) {
 		content := "Test note from integration test"
 		event, err := nostrClient.PublishTextNote(content)
 		if err != nil {
-			t.Fatalf("Failed to publish note: %v", err)
+			t.Fatalf("❌ Failed to publish note: %v", err)
+		} else {
+			fmt.Printf("✅ Published event with ID: %s\n", event.ID)
 		}
-		
-		t.Logf("Published event with ID: %s", event.ID)
 		
 		// Verify the event was stored in the database
 		if err := verifyEventInDB(event.ID, content); err != nil {
-			t.Fatalf("Event verification failed: %v", err)
+			t.Fatalf("❌ Event verification failed: %v", err)
+		} else {
+			fmt.Println("✅ Event verified in database")
 		}
 	})
 	
 	// Test signature verification
 	t.Run("SignatureVerification", func(t *testing.T) {
+		fmt.Println("🔏 Subtest: SignatureVerification")
 		// Create a client
 		nostrClient, err := client.NewNostrClient(relayURL)
 		if err != nil {
-			t.Fatalf("Failed to create client: %v", err)
+			t.Fatalf("❌ Failed to create client: %v", err)
+		} else {
+			fmt.Println("✅ Created client successfully")
 		}
 		defer nostrClient.Close()
-		
 		// Get the public key
 		pubKey := nostrClient.GetPublicKey()
 		t.Logf("Using public key: %s", pubKey)
-		
+		fmt.Printf("🔑 Using public key: %s\n", pubKey)
 		// Publish multiple events to test signature verification
 		for i := 1; i <= 3; i++ {
 			content := fmt.Sprintf("Signature test #%d", i)
 			event, err := nostrClient.PublishTextNote(content)
 			if err != nil {
-				t.Fatalf("Failed to publish note #%d: %v", i, err)
+				t.Fatalf("❌ Failed to publish note #%d: %v", i, err)
+			} else {
+				fmt.Printf("✅ Published event #%d with ID: %s\n", i, event.ID)
 			}
-			t.Logf("Published event #%d with ID: %s", i, event.ID)
 		}
-		
 		// Verify events count in database
 		count, err := getEventCount()
 		if err != nil {
-			t.Fatalf("Failed to get event count: %v", err)
+			t.Fatalf("❌ Failed to get event count: %v", err)
+		} else {
+			fmt.Printf("📦 Events in database: %d\n", count)
 		}
-		
 		// We should have at least 4 events (1 from previous test + 3 from this test)
 		if count < 4 {
-			t.Fatalf("Expected at least 4 events in database, got %d", count)
+			t.Fatalf("❌ Expected at least 4 events in database, got %d", count)
+		} else {
+			fmt.Println("✅ Event count in database is as expected")
 		}
 	})
 	
 	// Test event retrieval
 	t.Run("EventRetrieval", func(t *testing.T) {
+		fmt.Println("🔎 Subtest: EventRetrieval")
 		// Create a client
 		nostrClient, err := client.NewNostrClient(relayURL)
 		if err != nil {
-			t.Fatalf("Failed to create client: %v", err)
+			t.Fatalf("❌ Failed to create client: %v", err)
+		} else {
+			fmt.Println("✅ Created client successfully")
 		}
 		defer nostrClient.Close()
-		
 		// Subscribe to events
 		subID := "test-sub"
 		filters := map[string]interface{}{
 			"kinds": []int{1},
 			"limit": 10,
 		}
-		
 		err = nostrClient.SubscribeToEvents(subID, filters)
 		if err != nil {
-			t.Fatalf("Failed to subscribe to events: %v", err)
+			t.Fatalf("❌ Failed to subscribe to events: %v", err)
+		} else {
+			fmt.Println("✅ Subscribed to events successfully")
 		}
-		
 		// Give some time for subscription to process
 		time.Sleep(1 * time.Second)
-		
+		fmt.Println("📬 Subscription processing complete (waited 1s)")
 		// We can't easily verify the subscription results in this test framework,
 		// but we've at least verified that the subscription request doesn't error
 	})
@@ -207,6 +220,7 @@ func getEventCount() (int, error) {
 
 // TestEventSignatureVerification tests the signature verification functionality directly
 func TestEventSignatureVerification(t *testing.T) {
+	fmt.Println("🧪 Test: EventSignatureVerification")
 	// This test requires the relay to be running
 	cmd, cancel := startRelay(t)
 	defer func() {
@@ -218,31 +232,36 @@ func TestEventSignatureVerification(t *testing.T) {
 	privateKey := "0000000000000000000000000000000000000000000000000000000000000001"
 	nostrClient, err := client.NewNostrClientWithKey(relayURL, privateKey)
 	if err != nil {
-		t.Fatalf("Failed to create client with key: %v", err)
+		t.Fatalf("❌ Failed to create client with key: %v", err)
+	} else {
+		fmt.Println("✅ Created client with key successfully")
 	}
 	defer nostrClient.Close()
 	
 	// Get the public key
 	pubKey := nostrClient.GetPublicKey()
-	t.Logf("Using deterministic public key: %s", pubKey)
-	
+	t.Logf("Using public key: %s", pubKey)
+	fmt.Printf("🔑 Using public key: %s\n", pubKey)
 	// Publish a test note
 	content := "Test note with deterministic key"
 	event, err := nostrClient.PublishTextNote(content)
 	if err != nil {
-		t.Fatalf("Failed to publish note with deterministic key: %v", err)
+		t.Fatalf("❌ Failed to publish note with deterministic key: %v", err)
+	} else {
+		fmt.Printf("✅ Published event with ID: %s\n", event.ID)
 	}
-	
-	t.Logf("Published event with ID: %s", event.ID)
 	
 	// Verify the event was stored in the database
 	if err := verifyEventInDB(event.ID, content); err != nil {
-		t.Fatalf("Event verification failed: %v", err)
+		t.Fatalf("❌ Event verification failed: %v", err)
+	} else {
+		fmt.Println("✅ Event verified in database")
 	}
 }
 
 // TestInvalidSignature tests that events with invalid signatures are rejected
 func TestInvalidSignature(t *testing.T) {
+	fmt.Println("🧪 Test: InvalidSignature")
 	// This test would require modifying the client to produce invalid signatures
 	// For now, we'll just log that this test would be valuable to implement
 	t.Log("TestInvalidSignature: This test would verify that events with invalid signatures are rejected")
