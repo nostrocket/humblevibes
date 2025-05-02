@@ -4,14 +4,21 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"log"
+	"sync"
 	"time"
 
 	"github.com/gareth/go-nostr-relay/lib/crypto"
 	"github.com/gareth/go-nostr-relay/lib/utils"
 )
 
-var relayLogger = utils.NewLogger("relay")
+var (
+	// Logger
+	relayLogger = utils.NewLogger("relay")
+	
+	// Cache of mismatched event fingerprints to avoid duplicate logging
+	mismatchedEvents     = make(map[string]bool)
+	mismatchedEventsMutex sync.Mutex
+)
 
 // Event represents a Nostr event
 type Event struct {
@@ -47,41 +54,57 @@ func (c *Client) handleEvent(msg []json.RawMessage) {
 		return
 	}
 
-	// Log event if verbose mode is enabled
-	if c.relay.verbose {
-		author := event.PubKey
-		if len(author) > 8 {
-			author = author[:8] + "..."
-		}
-		content := event.Content
-		if len(content) > 40 {
-			content = content[:37] + "..."
-		}
-		log.Printf("📩 Received event: ID=%s, Kind=%d, Author=%s, Content=%s", 
-			event.ID[:8]+"...", event.Kind, author, content)
+	// Get a shortened event ID and author for logging
+	shortID := event.ID
+	if len(shortID) > 8 {
+		shortID = shortID[:8] + "..."
+	}
+	
+	author := event.PubKey
+	if len(author) > 8 {
+		author = author[:8] + "..."
+	}
+	
+	content := event.Content
+	if len(content) > 40 {
+		content = content[:37] + "..."
 	}
 
-	// Validate the event
+	// First check if the event already exists in the database
+	exists, err := c.relay.eventExists(event.ID)
+	if err != nil {
+		c.sendError(fmt.Sprintf("Failed to check event existence: %v", err), "")
+		relayLogger.Error("Database error checking event existence: %v", err)
+		return
+	}
+
+	if exists {
+		// Event already exists, skip validation logs and just accept it
+		relayLogger.Debug("⏩ Event already exists (ID: %s)", shortID)
+		// Send OK message back to the client
+		c.sendResponse([]interface{}{"OK", event.ID, true, "duplicate: already have this event"})
+		return
+	}
+
+	// Log receipt of new event
+	relayLogger.Info("📥 New event received: ID=%s, Kind=%d, Author=%s", 
+		shortID, event.Kind, author)
+
+	// Validate the event (only for new events)
 	if err := validateEvent(&event); err != nil {
 		c.sendError(fmt.Sprintf("Invalid event: %v", err), "")
-		if c.relay.verbose {
-			log.Printf("❌ Event validation failed: %v", err)
-		}
+		relayLogger.Error("❌ Event validation failed: %v", err)
 		return
 	}
 
 	// Store the event in the database
 	if err := c.relay.storeEvent(&event); err != nil {
 		c.sendError(fmt.Sprintf("Failed to store event: %v", err), "")
-		if c.relay.verbose {
-			log.Printf("❌ Failed to store event: %v", err)
-		}
+		relayLogger.Error("❌ Failed to store event: %v", err)
 		return
 	}
 
-	if c.relay.verbose {
-		log.Printf("✅ Event stored successfully: %s", event.ID[:8]+"...")
-	}
+	relayLogger.Info("✅ Event stored and broadcasted: %s (Kind: %d)", shortID, event.Kind)
 
 	// Broadcast the event to all clients with matching subscriptions
 	c.relay.broadcastEvent(&event)
@@ -93,10 +116,10 @@ func (c *Client) handleEvent(msg []json.RawMessage) {
 // validateEvent validates a Nostr event
 func validateEvent(event *Event) error {
 	// Extra debug logging
-	relayLogger.Info("🧪 Validating event ID: %s", event.ID)
-	relayLogger.Info("  👤 Author: %s", event.PubKey)
-	relayLogger.Info("  🕒 Created: %d", event.CreatedAt)
-	relayLogger.Info("  🏷️  Kind: %d", event.Kind)
+	relayLogger.Debug("🧪 Validating event ID: %s", event.ID)
+	relayLogger.Debug("  👤 Author: %s", event.PubKey)
+	relayLogger.Debug("  🕒 Created: %d", event.CreatedAt)
+	relayLogger.Debug("  🏷️  Kind: %d", event.Kind)
 	
 	// Check required fields
 	if event.PubKey == "" {
@@ -131,10 +154,56 @@ func validateEvent(event *Event) error {
 	
 	// Verify the event ID
 	if computedID != event.ID {
+		// Create a unique fingerprint for this event's content
+		// This identifies the event regardless of its ID
+		fingerprint := fmt.Sprintf("%s:%d:%d:%s", 
+			event.PubKey, event.CreatedAt, event.Kind, event.Content)
+		
+		// Check if we've seen this mismatched event before
+		mismatchedEventsMutex.Lock()
+		seenBefore := mismatchedEvents[fingerprint]
+		if !seenBefore {
+			// Mark this event fingerprint as seen
+			mismatchedEvents[fingerprint] = true
+		}
+		mismatchedEventsMutex.Unlock()
+		
+		// Always log the basic error message
 		relayLogger.Error("❌ ID mismatch: computed=%s vs. provided=%s", computedID, event.ID)
+		
+		// Only log detailed information the first time we see this event content
+		if !seenBefore {
+			// Print the entire event for debugging
+			eventJSON, err := json.MarshalIndent(event, "", "  ")
+			if err != nil {
+				relayLogger.Error("Failed to marshal event for logging: %v", err)
+			} else {
+				relayLogger.Error("Invalid event details:\n%s", string(eventJSON))
+			}
+			
+			// Print the input that went into the ID computation
+			computeInput := []interface{}{
+				0,
+				event.PubKey,
+				event.CreatedAt,
+				event.Kind,
+				event.Tags,
+				event.Content,
+			}
+			inputJSON, err := json.MarshalIndent(computeInput, "", "  ")
+			if err != nil {
+				relayLogger.Error("Failed to marshal computation input for logging: %v", err)
+			} else {
+				relayLogger.Error("ID computation input:\n%s", string(inputJSON))
+			}
+		} else {
+			relayLogger.Debug("⏩ Skipping detailed logging for previously seen mismatched event (fingerprint: %s)", 
+				fingerprint[:32]+"...")
+		}
+		
 		return fmt.Errorf("event ID mismatch")
 	}
-	relayLogger.Info("✅ Event ID valid")
+	relayLogger.Debug("✅ Event ID valid")
 	
 	// Verify the signature
 	cryptoEvent.ID = event.ID
@@ -143,9 +212,9 @@ func validateEvent(event *Event) error {
 		relayLogger.Error("❌ Signature verification failed: %v", err)
 		return fmt.Errorf("signature verification failed: %v", err)
 	}
-	relayLogger.Info("✅ Signature valid")
+	relayLogger.Debug("✅ Signature valid")
 	
-	relayLogger.Info("✅ Event validated successfully")
+	relayLogger.Debug("✅ Event validated successfully")
 	return nil
 }
 
@@ -163,6 +232,16 @@ func (r *Relay) storeEvent(event *Event) error {
 		event.ID, event.PubKey, event.CreatedAt, event.Kind, string(tagsJSON), event.Content, event.Sig,
 	)
 	return err
+}
+
+// eventExists checks if an event with the given ID already exists in the database
+func (r *Relay) eventExists(id string) (bool, error) {
+	var count int
+	err := r.db.QueryRow("SELECT COUNT(*) FROM events WHERE id = ?", id).Scan(&count)
+	if err != nil {
+		return false, err
+	}
+	return count > 0, nil
 }
 
 // broadcastEvent broadcasts an event to all clients with matching subscriptions

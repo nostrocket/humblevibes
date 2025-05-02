@@ -108,7 +108,14 @@ func main() {
 	flag.BoolVar(printEvents, "p", false, "Print each event received before forwarding (shorthand)")
 	skipOld := flag.Bool("skip-old", false, "Skip events older than 24 hours")
 	useDiscovery := flag.Bool("discover", false, "Discover relays using nostr.watch API when no source relays are specified")
-	maxRelays := flag.Int("max-relays", 10, "Maximum number of relays to discover (used with -discover)")
+	
+	// Define relayCount with both long and short forms
+	relayCount := flag.Int("relays", 10, "Number of relays to auto-discover when using -discover")
+	flag.IntVar(relayCount, "n", 10, "Number of relays to auto-discover (shorthand)")
+	
+	// Keep max-relays for backward compatibility
+	flag.IntVar(relayCount, "max-relays", 10, "Maximum number of relays to discover (legacy, use -relays instead)")
+	
 	flag.Parse()
 
 	// Parse kinds
@@ -165,7 +172,7 @@ func main() {
 	// If source relays are empty and discovery is enabled, fetch from nostr.watch
 	if *sourceRelays == "" {
 		if *useDiscovery {
-			discoveredRelays, err := fetchPopularRelays(*maxRelays)
+			discoveredRelays, err := fetchPopularRelays(*relayCount)
 			if err != nil {
 				forwarderLogger.Error("Failed to discover relays: %v", err)
 				os.Exit(1)
@@ -196,7 +203,7 @@ func main() {
 		PrintEvents:  *printEvents,
 		SkipOld:      *skipOld,
 		UseDiscovery: *useDiscovery,
-		MaxRelays:    *maxRelays,
+		MaxRelays:    *relayCount,
 	}
 
 	// Print configuration
@@ -268,19 +275,46 @@ func (f *Forwarder) Start() {
 		os.Exit(1)
 	}
 
-	// Connect to source relays
+	// Use a mutex to protect concurrent access to sourceClients
+	var sourceClientsMutex sync.Mutex
+	
+	// Create a wait group to know when all connection attempts are done
+	var connectWg sync.WaitGroup
+	
+	// Connect to source relays concurrently
+	connectWg.Add(len(f.config.SourceRelays))
 	for _, relayURL := range f.config.SourceRelays {
-		sourceClient, err := client.NewNostrClient(relayURL)
-		if err != nil {
-			forwarderLogger.Warn("Failed to connect to source relay %s: %v", relayURL, err)
-			continue
-		}
-		f.sourceClients = append(f.sourceClients, sourceClient)
-
-		// Subscribe to events
-		f.wg.Add(1)
-		go f.subscribeToRelay(sourceClient, relayURL)
+		// Capture the relayURL for the goroutine
+		relayURL := relayURL
+		
+		// Start a goroutine to connect to this relay
+		go func() {
+			defer connectWg.Done()
+			
+			// Connect to the relay
+			sourceClient, err := client.NewNostrClient(relayURL)
+			if err != nil {
+				forwarderLogger.Warn("Failed to connect to source relay %s: %v", relayURL, err)
+				return
+			}
+			
+			// Safely add to the source clients slice
+			sourceClientsMutex.Lock()
+			f.sourceClients = append(f.sourceClients, sourceClient)
+			sourceClientsMutex.Unlock()
+			
+			// Start subscription in a new goroutine
+			f.wg.Add(1)
+			go f.subscribeToRelay(sourceClient, relayURL)
+		}()
 	}
+	
+	// Wait for all connection attempts to complete
+	connectWg.Wait()
+	
+	// Log the result
+	forwarderLogger.Info("Connected to %d out of %d source relays", 
+		len(f.sourceClients), len(f.config.SourceRelays))
 
 	// Start event processor
 	f.wg.Add(1)
