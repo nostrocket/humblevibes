@@ -116,6 +116,42 @@ make run-export-content-custom PUBKEY=3bf0c63fcb93463407af97a5e5ee64fa883d107ef9
 # Use a custom separator
 make run-export-content-custom PUBKEY=3bf0c63fcb93463407af97a5e5ee64fa883d107ef9e558472c4eb9aaaef47fec ARGS="--separator '\n---\n'"
 
+## Automated Content Harvesting
+
+The project includes automated workflows to harvest content from a specific pubkey across multiple relays and export it to a text file:
+
+```bash
+# Use the existing database (default)
+make harvest-and-export PUBKEY=npub1mygerccwqpzyh9pvp6pv44rskv40zutkfs38t0hqhkvnwlhagp6s3psn5p
+
+# Use a dedicated database just for this harvesting operation
+make harvest-and-export-custom PUBKEY=npub1mygerccwqpzyh9pvp6pv44rskv40zutkfs38t0hqhkvnwlhagp6s3psn5p
+```
+
+These commands perform the following steps automatically:
+
+1. Starts a local relay on port 8899 (with either the default database or a dedicated one)
+2. Runs a dual-phase discovery process:
+   - First phase: Connects to 250 relays and collects content for 3 minutes
+   - Second phase: Connects to 250 different relays and collects content for 3 minutes
+3. Stops all processes and exports the collected content in chronological order
+
+The dual-phase approach ensures more comprehensive relay coverage by connecting to different relay sets in each phase. This helps discover content that might only be available on certain relays.
+
+The exported content will be saved to a file named `<PUBKEY>_harvested.txt`.
+
+Use the default database (`harvest-and-export`) when you want to:
+- Add harvested content to your main database
+- Keep all events in one place for future access
+- Build on existing content you've already collected
+
+Use a dedicated database (`harvest-and-export-custom`) when you want to:
+- Create an isolated collection for a specific purpose
+- Avoid affecting your main database
+- Export content from just one harvesting session
+
+This is useful for quickly collecting and aggregating all content from a specific author across the Nostr network.
+
 ## Testing
 
 Run all tests:

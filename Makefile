@@ -1,4 +1,4 @@
-.PHONY: all build clean run-relay run-relay-custom run-publisher run-publisher-custom run-publisher-interactive run-publisher-multi run-monitor run-forwarder run-forwarder-custom run-forwarder-relay run-export-content run-export-content-custom test test-unit test-integration test-all test-forwarder
+.PHONY: all build clean run-relay run-relay-custom run-publisher run-publisher-custom run-publisher-interactive run-publisher-multi run-monitor run-forwarder run-forwarder-custom run-forwarder-relay run-export-content run-export-content-custom harvest-and-export harvest-and-export-custom test test-unit test-integration test-all test-forwarder
 
 # Binary output directory
 BIN_DIR=bin
@@ -83,6 +83,18 @@ run-export-content: $(EXPORT_CONTENT_BIN)
 run-export-content-custom: $(EXPORT_CONTENT_BIN)
 	$(EXPORT_CONTENT_BIN) --pubkey $(PUBKEY) $(ARGS)
 
+# Harvest content from 500 relays for a specific pubkey, then export it (using default database)
+# Uses a dual-phase approach: runs forwarder twice with different relay discovery settings
+# Usage: make harvest-and-export PUBKEY=<pubkey or npub>
+harvest-and-export: $(RELAY_BIN) $(FORWARDER_BIN) $(EXPORT_CONTENT_BIN)
+	@./scripts/dual-phase-harvest.sh "$(PUBKEY)" 8899 180 nostr.db "$(PUBKEY)_harvested.txt"
+
+# Harvest content from 500 relays for a specific pubkey using a dedicated database, then export it
+# Uses a dual-phase approach: runs forwarder twice with different relay discovery settings
+# Usage: make harvest-and-export-custom PUBKEY=<pubkey or npub>
+harvest-and-export-custom: $(RELAY_BIN) $(FORWARDER_BIN) $(EXPORT_CONTENT_BIN)
+	@./scripts/dual-phase-harvest.sh "$(PUBKEY)" 8899 180 "harvest_$(PUBKEY).db" "$(PUBKEY)_harvested.txt"
+
 # Run unit tests only
 test-unit:
 	go test -v ./relay ./client
@@ -135,6 +147,8 @@ help:
 	@echo "  run-forwarder-relay - Run the forwarder with specific source and target relays"
 	@echo "  run-export-content  - Run the content export tool"
 	@echo "  run-export-content-custom - Run the content export tool with specific pubkey and options"
+	@echo "  harvest-and-export  - Harvest content using the existing database with dual-phase relay discovery"
+	@echo "  harvest-and-export-custom - Harvest content using a dedicated database with dual-phase relay discovery"
 	@echo "  test-unit           - Run unit tests only"
 	@echo "  test-integration    - Run integration tests only"
 	@echo "  test-all            - Run all tests"
