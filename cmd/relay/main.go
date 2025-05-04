@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
 	"github.com/gareth/go-nostr-relay/relay"
 )
@@ -17,10 +18,16 @@ func main() {
 	dbPath := flag.String("db", "nostr.db", "Path to SQLite database")
 	verbose := flag.Bool("verbose", false, "Enable verbose logging of received events")
 	flag.BoolVar(verbose, "v", false, "Enable verbose logging of received events (shorthand)")
+	timeout := flag.Int("timeout", 0, "WebSocket connection timeout in seconds (0 for no timeout)")
 	flag.Parse()
 
-	// Initialize the relay
-	r, err := relay.NewRelay(*dbPath, relay.WithVerboseLogging(*verbose))
+	// Initialize the relay with options
+	opts := []relay.Option{relay.WithVerboseLogging(*verbose)}
+	
+	// Always add timeout option, even when it's 0, to ensure proper configuration
+	opts = append(opts, relay.WithConnectionTimeouts(time.Duration(*timeout)*time.Second))
+	
+	r, err := relay.NewRelay(*dbPath, opts...)
 	if err != nil {
 		log.Fatalf("Failed to initialize relay: %v", err)
 	}

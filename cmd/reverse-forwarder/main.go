@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -29,6 +30,8 @@ type Config struct {
 	PrintEvents  bool
 	SkipOld      bool
 	MaxRelays    int // Maximum number of relays to discover
+	KeepAlive    bool // Whether to use ping/pong to keep connections alive
+	PingInterval time.Duration // Interval between pings (for keep-alive)
 }
 
 // ReverseForwarder handles subscribing to a source relay and forwarding events to multiple target relays
@@ -104,6 +107,16 @@ func fetchRelaysFromNostrWatch(maxRelays int) ([]string, error) {
 
 // Start connects to relays and begins forwarding events
 func (rf *ReverseForwarder) Start() error {
+	// First, discover target relays if needed
+	if len(rf.config.TargetRelays) == 0 {
+		logger.Info("No target relays specified, discovering relays from nostr.watch...")
+		discoveredRelays, err := fetchRelaysFromNostrWatch(rf.config.MaxRelays)
+		if err != nil {
+			return fmt.Errorf("failed to discover target relays: %v", err)
+		}
+		rf.config.TargetRelays = discoveredRelays
+	}
+
 	// Connect to the source relay first
 	logger.Info("Connecting to source relay: %s", rf.config.SourceRelay)
 	sourceClient, err := client.NewNostrClient(rf.config.SourceRelay)
@@ -137,6 +150,13 @@ func (rf *ReverseForwarder) Start() error {
 	}
 	
 	logger.Info("Connected to %d target relays", len(rf.targetClients))
+
+	// Start the keep-alive pings for source and target relays if enabled
+	if rf.config.KeepAlive {
+		// Start a goroutine to send periodic pings to the source relay
+		rf.wg.Add(1)
+		go rf.keepConnectionsAlive()
+	}
 
 	// Start the event processor
 	rf.wg.Add(1)
@@ -175,41 +195,146 @@ func (rf *ReverseForwarder) subscribeToSourceRelay() {
 	
 	logger.Info("Subscribing to events from %s", rf.config.SourceRelay)
 	
-	// Generate a subscription ID
-	subID := fmt.Sprintf("sub_%d", time.Now().Unix())
+	// Add a count of events we've received and forwarded for logging
+	eventCount := 0
 	
-	// Subscribe to events
-	err := rf.sourceClient.SubscribeToEventsWithHandler(subID, rf.config.Filters, func(event *client.Event) {
-		// Check if we should skip old events
-		if rf.config.SkipOld && time.Now().Unix()-event.CreatedAt > 86400 {
-			return
-		}
-		
-		// Log or print the event if requested
-		if rf.config.LogEvents {
-			logger.Info("Received event %s from %s", truncateString(event.ID, 8), rf.config.SourceRelay)
-		}
-		if rf.config.PrintEvents {
-			eventJSON, _ := json.Marshal(event)
-			fmt.Println(string(eventJSON))
-		}
-		
+	// Set up a more robust context-based approach with retry logic
+	for {
 		select {
-		case rf.events <- event:
-			// Event added to queue
 		case <-rf.stopChan:
-			// Forwarder is stopping
+			logger.Info("Stopping source relay subscription")
 			return
+		default:
+			// Subscribe to events with the user's specified filters
+			logger.Info("Creating subscription with filters: %v", rf.config.Filters)
+			
+			// Create a subscription context that can be canceled
+			ctx, cancel := context.WithCancel(context.Background())
+			
+			// Create a channel for subscription errors
+			errorChan := make(chan error, 1)
+			
+			// Start a goroutine to monitor the connection
+			go func() {
+				for {
+					select {
+					case <-ctx.Done():
+						return
+					case <-time.After(5 * time.Second):
+						// Send a ping to verify the connection
+						err := rf.sourceClient.SendPing("ping_" + time.Now().Format(time.RFC3339))
+						if err != nil {
+							logger.Warn("Failed to send ping to source relay: %v", err)
+							errorChan <- fmt.Errorf("ping failed: %w", err)
+							return
+						}
+					}
+				}
+			}()
+			
+			// Start a goroutine to handle subscription notifications
+			go func() {
+				// Generate a subscription ID with timestamp
+				subID := fmt.Sprintf("sub_%d", time.Now().Unix())
+				
+				// Set up a channel to detect when the context is done
+				ctxDone := make(chan struct{})
+				
+				// Monitor the context in a separate goroutine
+				go func() {
+					<-ctx.Done()
+					close(ctxDone)
+				}()
+				
+				// Use the existing method but wrap it with our own context handling
+				err := rf.sourceClient.SubscribeToEventsWithHandler(subID, rf.config.Filters, func(event *client.Event) {
+					// Check if we should skip old events
+					if rf.config.SkipOld && time.Now().Unix()-event.CreatedAt > 86400 {
+						return
+					}
+					
+					// Increment event counter
+					eventCount++
+					
+					// Log or print the event if requested
+					if rf.config.LogEvents {
+						logger.Info("Received event %s from %s (#%d)", truncateString(event.ID, 8), rf.config.SourceRelay, eventCount)
+					}
+					if rf.config.PrintEvents {
+						eventJSON, _ := json.Marshal(event)
+						fmt.Println(string(eventJSON))
+					}
+					
+					select {
+					case rf.events <- event:
+						// Event added to queue
+					case <-rf.stopChan:
+						// Forwarder is stopping
+						cancel()
+						return
+					}
+				})
+				
+				// This point is reached when the subscription ends
+				select {
+				case <-ctxDone:
+					// Context was canceled, no need to report error
+					return
+				default:
+					// Subscription ended for some other reason
+					if err != nil {
+						errorChan <- err
+					} else {
+						// If the subscription ended without an error, it still means the connection was closed
+						errorChan <- fmt.Errorf("subscription ended")
+					}
+				}
+			}()
+			
+			// Wait for either a stop signal or an error
+			select {
+			case <-rf.stopChan:
+				// The forwarder is stopping
+				cancel()
+				return
+				
+			case err := <-errorChan:
+				// The subscription ended with an error
+				cancel()
+				
+				if err != nil {
+					logger.Warn("Source relay connection closed: %v", err)
+				} else {
+					logger.Warn("Source relay connection closed")
+				}
+				
+				// Wait before attempting to reconnect
+				select {
+				case <-rf.stopChan:
+					return
+				case <-time.After(5 * time.Second):
+					logger.Warn("Attempting to reconnect to source relay...")
+					
+					// Close the old connection
+					if rf.sourceClient != nil {
+						rf.sourceClient.Close()
+					}
+					
+					// Try to establish a new connection
+					newClient, err := client.NewNostrClient(rf.config.SourceRelay)
+					if err != nil {
+						logger.Error("Failed to reconnect to source relay: %v", err)
+						// Try again in the next loop iteration
+						continue
+					}
+					
+					// Update the client
+					rf.sourceClient = newClient
+					logger.Info("Successfully reconnected to source relay")
+				}
+			}
 		}
-	})
-	
-	if err != nil {
-		logger.Error("Failed to subscribe to events from %s: %v", rf.config.SourceRelay, err)
-		return
 	}
-	
-	// Keep the subscription active until stopped
-	<-rf.stopChan
 }
 
 // processEvents processes events from the queue and forwards them to the target relays
@@ -258,30 +383,125 @@ func (rf *ReverseForwarder) forwardEvents(events []*client.Event) {
 	// Create a waitgroup to track completion
 	var wg sync.WaitGroup
 	
+	// Count successful forwards
+	successCount := 0
+	var countMutex sync.Mutex
+	
 	// Forward to each target relay in parallel
-	for _, targetClient := range rf.targetClients {
+	for i, targetClient := range rf.targetClients {
 		wg.Add(1)
-		go func(client *client.NostrClient, eventBatch []*client.Event) {
+		go func(idx int, clientInstance *client.NostrClient, eventBatch []*client.Event) {
 			defer wg.Done()
 			
+			// Track failures for this relay
+			failures := 0
+			localSuccess := 0
+			
 			for _, event := range eventBatch {
-				success, message, err := client.PublishExistingEvent(event)
+				success, message, err := clientInstance.PublishExistingEvent(event)
 				
 				if err != nil {
+					failures++
 					logger.Error("Failed to publish event %s to relay: %v", truncateString(event.ID, 8), err)
 				} else if !success {
+					failures++
 					logger.Warn("Relay rejected event %s: %s", truncateString(event.ID, 8), message)
-				} else if rf.config.LogEvents {
-					logger.Info("Successfully forwarded event %s", truncateString(event.ID, 8))
+				} else {
+					localSuccess++
+					if rf.config.LogEvents {
+						logger.Info("Successfully forwarded event %s", truncateString(event.ID, 8))
+					}
+				}
+				
+				// If we have too many consecutive failures, try to reconnect
+				if failures >= 5 {
+					logger.Warn("Too many failures with relay %d, attempting to reconnect...", idx)
+					
+					// Close the old connection
+					clientInstance.Close()
+					
+					// Try to reconnect using the package function (not the client instance)
+					newClient, err := client.NewNostrClient(rf.config.TargetRelays[idx])
+					if err != nil {
+						logger.Error("Failed to reconnect to target relay %d: %v", idx, err)
+						return
+					}
+					
+					// Update the client
+					rf.targetClients[idx] = newClient
+					clientInstance = newClient
+					logger.Info("Successfully reconnected to target relay %d", idx)
+					
+					// Reset failure counter
+					failures = 0
 				}
 			}
-		}(targetClient, events)
+			
+			// Add successful forwards to the counter
+			countMutex.Lock()
+			successCount += localSuccess
+			countMutex.Unlock()
+		}(i, targetClient, events)
 	}
 	
 	// Wait for all forwards to complete
 	wg.Wait()
 	
-	logger.Info("Forwarded %d events to %d relays", len(events), len(rf.targetClients))
+	logger.Info("Forwarded %d events to %d relays (%d successful publishes)", len(events), len(rf.targetClients), successCount)
+}
+
+// keepConnectionsAlive sends periodic pings to keep WebSocket connections active
+func (rf *ReverseForwarder) keepConnectionsAlive() {
+	defer rf.wg.Done()
+	
+	logger.Info("Starting keep-alive mechanism with ping interval: %v", rf.config.PingInterval)
+	
+	ticker := time.NewTicker(rf.config.PingInterval)
+	defer ticker.Stop()
+	
+	// Counter for ping messages to make each one unique
+	pingCounter := 0
+	
+	for {
+		select {
+		case <-ticker.C:
+			// Increment counter
+			pingCounter++
+			
+			// Create a ping message (REQ with no filters)
+			// This keeps the connection active without actually requesting data
+			pingID := fmt.Sprintf("ping_%d", pingCounter)
+			
+			// Try to send a ping message to the source relay
+			if rf.sourceClient != nil {
+				// Send a dummy REQ that won't match anything (limit:0)
+				err := rf.sourceClient.SendPing(pingID)
+				if err != nil {
+					logger.Warn("Failed to send ping to source relay: %v", err)
+				} else {
+					logger.Debug("Sent keep-alive ping to source relay: %s", pingID)
+				}
+			}
+			
+			// Try to send a ping message to each target relay
+			for i, client := range rf.targetClients {
+				if client != nil {
+					// Use a unique ID for each target
+					targetPingID := fmt.Sprintf("%s_target%d", pingID, i)
+					err := client.SendPing(targetPingID)
+					if err != nil {
+						logger.Warn("Failed to send ping to target relay %d: %v", i, err)
+					} else {
+						logger.Debug("Sent keep-alive ping to target relay %d: %s", i, targetPingID)
+					}
+				}
+			}
+			
+		case <-rf.stopChan:
+			logger.Info("Stopping keep-alive mechanism")
+			return
+		}
+	}
 }
 
 // truncateString truncates a string to the specified length
@@ -296,55 +516,72 @@ func truncateString(s string, maxLen int) string {
 func (rf *ReverseForwarder) validateSourceRelay() error {
 	logger.Info("Validating source relay connection...")
 	
-	// Create a validation channel to receive the validation result
+	// Create channels to receive the validation result
 	validationChan := make(chan error, 1)
+	successChan := make(chan struct{}, 1)
 	
 	// Generate a test subscription ID
 	testSubID := fmt.Sprintf("test_sub_%d", time.Now().Unix())
 	
-	// Create minimal filter for validation - request just 1 event
+	// Create a very specific filter for validation - only request one random event
 	testFilter := map[string]interface{}{
 		"limit": 1,
+		// Add a random dummy author to make sure we don't consume all events
+		// This won't match any real events but will test the subscription mechanism
+		"authors": []string{"0000000000000000000000000000000000000000000000000000000000000000"},
 	}
 	
-	// Set a timeout for validation
-	timeout := time.After(5 * time.Second)
-	
-	// Start a goroutine to test the subscription
+	// Start the subscription using the NostrClient's exported method with EOSE callback
 	go func() {
-		// Subscribe with a simple handler that just signals success
-		err := rf.sourceClient.SubscribeToEventsWithHandler(testSubID, testFilter, 
-			func(event *client.Event) {
-				// Successfully received an event, signal success
-				select {
-				case validationChan <- nil:
-					// Sent success signal
-				default:
-					// Channel already has a value, do nothing
-				}
-			})
+		logger.Info("Sending validation subscription to source relay...")
 		
-		if err != nil {
-			// Failed to subscribe
-			validationChan <- err
-			return
+		// Define a handler for events (unlikely to receive any with our filter, but just in case)
+		eventHandler := func(event *client.Event) {
+			logger.Info("Received event during validation: %s", truncateString(event.ID, 8))
+			select {
+			case successChan <- struct{}{}:
+			default:
+			}
 		}
 		
-		// If we get here without error but don't receive an event within the timeout,
-		// the timeout will handle it
+		// Define an EOSE callback to signal successful validation when we get an EOSE
+		eoseCallback := func() {
+			logger.Info("Received EOSE during validation - connection validated")
+			// Signal validation success
+			select {
+			case successChan <- struct{}{}:
+			default:
+			}
+		}
+		
+		// Subscribe with both event handler and EOSE callback
+		err := rf.sourceClient.SubscribeToEventsWithHandlerAndEOSE(
+			testSubID, 
+			testFilter, 
+			eventHandler, 
+			eoseCallback,
+		)
+		
+		if err != nil {
+			validationChan <- fmt.Errorf("subscription error: %v", err)
+			return
+		}
 	}()
 	
-	// Wait for either validation success, error, or timeout
+	// Wait for either a successful subscription response, an error, or a timeout
 	select {
+	case <-successChan:
+		// We received either an event or an EOSE, which means the subscription is working
+		logger.Info("Source relay validation successful")
+		return nil
+		
 	case err := <-validationChan:
-		// We can't unsubscribe directly since we can't access the WebSocket connection
-		// But we'll consider the validation complete
+		// An error occurred during validation
 		return err
 		
-	case <-timeout:
-		// Even if we timeout, consider it a success if we at least could submit the subscription
-		// Many relays might not have events matching our criteria, but still be valid
-		return nil
+	case <-time.After(5 * time.Second):
+		// Timed out waiting for a response
+		return fmt.Errorf("timed out waiting for subscription response from relay")
 	}
 }
 
@@ -364,6 +601,8 @@ func main() {
 	skipOld := flag.Bool("skip-old", false, "Skip events older than 24 hours")
 	maxRelays := flag.Int("relays", 10, "Number of relays to auto-discover from nostr.watch")
 	flag.IntVar(maxRelays, "n", 10, "Number of relays to auto-discover (shorthand)")
+	keepAlive := flag.Bool("keep-alive", true, "Use ping mechanism to keep connections alive")
+	pingInterval := flag.Int("ping-interval", 20, "Seconds between ping messages for keep-alive (default: 20)")
 	
 	flag.Parse()
 	
@@ -433,14 +672,6 @@ func main() {
 			targetRelayList[i] = strings.TrimSpace(relay)
 		}
 		logger.Info("Using %d user-specified target relays", len(targetRelayList))
-	} else {
-		// Discover relays from nostr.watch
-		discoveredRelays, err := fetchRelaysFromNostrWatch(*maxRelays)
-		if err != nil {
-			logger.Error("Failed to discover relays: %v", err)
-			os.Exit(1)
-		}
-		targetRelayList = discoveredRelays
 	}
 	
 	// Create and start the reverse forwarder
@@ -453,6 +684,8 @@ func main() {
 		PrintEvents:  *printEvents,
 		SkipOld:      *skipOld,
 		MaxRelays:    *maxRelays,
+		KeepAlive:    *keepAlive,
+		PingInterval: time.Duration(*pingInterval) * time.Second,
 	}
 	
 	reverseForwarder := NewReverseForwarder(config)

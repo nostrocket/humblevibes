@@ -74,37 +74,37 @@ func (c *Client) handleEvent(msg []json.RawMessage) {
 	exists, err := c.relay.eventExists(event.ID)
 	if err != nil {
 		c.sendError(fmt.Sprintf("Failed to check event existence: %v", err), "")
-		relayLogger.Error("Database error checking event existence: %v", err)
+		utils.NewLogger("relay").Error("Database error checking event existence: %v", err)
 		return
 	}
 
 	if exists {
 		// Event already exists, skip validation logs and just accept it
-		relayLogger.Debug("⏩ Event already exists (ID: %s)", shortID)
+		utils.NewLogger("relay").Debug("⏩ Event already exists (ID: %s)", shortID)
 		// Send OK message back to the client
 		c.sendResponse([]interface{}{"OK", event.ID, true, "duplicate: already have this event"})
 		return
 	}
 
 	// Log receipt of new event
-	relayLogger.Info("📥 New event received: ID=%s, Kind=%d, Author=%s", 
+	utils.NewLogger("relay").Info("📥 New event received: ID=%s, Kind=%d, Author=%s", 
 		shortID, event.Kind, author)
 
 	// Validate the event (only for new events)
 	if err := validateEvent(&event); err != nil {
 		c.sendError(fmt.Sprintf("Invalid event: %v", err), "")
-		relayLogger.Error("❌ Event validation failed: %v", err)
+		utils.NewLogger("relay").Error("❌ Event validation failed: %v", err)
 		return
 	}
 
 	// Store the event in the database
 	if err := c.relay.storeEvent(&event); err != nil {
 		c.sendError(fmt.Sprintf("Failed to store event: %v", err), "")
-		relayLogger.Error("❌ Failed to store event: %v", err)
+		utils.NewLogger("relay").Error("❌ Failed to store event: %v", err)
 		return
 	}
 
-	relayLogger.Info("✅ Event stored and broadcasted: %s (Kind: %d)", shortID, event.Kind)
+	utils.NewLogger("relay").Info("✅ Event stored and broadcasted: %s (Kind: %d)", shortID, event.Kind)
 
 	// Broadcast the event to all clients with matching subscriptions
 	c.relay.broadcastEvent(&event)
@@ -116,24 +116,24 @@ func (c *Client) handleEvent(msg []json.RawMessage) {
 // validateEvent validates a Nostr event
 func validateEvent(event *Event) error {
 	// Extra debug logging
-	relayLogger.Debug("🧪 Validating event ID: %s", event.ID)
-	relayLogger.Debug("  👤 Author: %s", event.PubKey)
-	relayLogger.Debug("  🕒 Created: %d", event.CreatedAt)
-	relayLogger.Debug("  🏷️  Kind: %d", event.Kind)
+	utils.NewLogger("relay").Debug("🧪 Validating event ID: %s", event.ID)
+	utils.NewLogger("relay").Debug("  👤 Author: %s", event.PubKey)
+	utils.NewLogger("relay").Debug("  🕒 Created: %d", event.CreatedAt)
+	utils.NewLogger("relay").Debug("  🏷️  Kind: %d", event.Kind)
 	
 	// Check required fields
 	if event.PubKey == "" {
-		relayLogger.Error("❌ Missing pubkey")
+		utils.NewLogger("relay").Error("❌ Missing pubkey")
 		return errors.New("missing pubkey")
 	}
 	
 	if event.CreatedAt == 0 {
-		relayLogger.Error("❌ Missing created_at")
+		utils.NewLogger("relay").Error("❌ Missing created_at")
 		return errors.New("missing created_at")
 	}
 	
 	if event.Sig == "" {
-		relayLogger.Error("❌ Missing sig")
+		utils.NewLogger("relay").Error("❌ Missing sig")
 		return errors.New("missing sig")
 	}
 	
@@ -169,16 +169,16 @@ func validateEvent(event *Event) error {
 		computedID := nostrEvent.GetID()
 		
 		// Always log the basic error message
-		relayLogger.Error("❌ ID mismatch: computed=%s vs. provided=%s", computedID, event.ID)
+		utils.NewLogger("relay").Error("❌ ID mismatch: computed=%s vs. provided=%s", computedID, event.ID)
 		
 		// Only log detailed information the first time we see this event content
 		if !seenBefore {
 			// Print the entire event for debugging
 			eventJSON, err := json.MarshalIndent(event, "", "  ")
 			if err != nil {
-				relayLogger.Error("Failed to marshal event for logging: %v", err)
+				utils.NewLogger("relay").Error("Failed to marshal event for logging: %v", err)
 			} else {
-				relayLogger.Error("Invalid event details:\n%s", string(eventJSON))
+				utils.NewLogger("relay").Error("Invalid event details:\n%s", string(eventJSON))
 			}
 			
 			// Print the input that went into the ID computation
@@ -192,28 +192,28 @@ func validateEvent(event *Event) error {
 			}
 			inputJSON, err := json.MarshalIndent(computeInput, "", "  ")
 			if err != nil {
-				relayLogger.Error("Failed to marshal computation input for logging: %v", err)
+				utils.NewLogger("relay").Error("Failed to marshal computation input for logging: %v", err)
 			} else {
-				relayLogger.Error("ID computation input:\n%s", string(inputJSON))
+				utils.NewLogger("relay").Error("ID computation input:\n%s", string(inputJSON))
 			}
 		} else {
-			relayLogger.Debug("⏩ Skipping detailed logging for previously seen mismatched event (fingerprint: %s)", 
+			utils.NewLogger("relay").Debug("⏩ Skipping detailed logging for previously seen mismatched event (fingerprint: %s)", 
 				fingerprint[:32]+"...")
 		}
 		
 		return fmt.Errorf("event ID mismatch")
 	}
-	relayLogger.Debug("✅ Event ID valid")
+	utils.NewLogger("relay").Debug("✅ Event ID valid")
 	
 	// Verify the signature using the nbd-wtf/go-nostr library
 	ok, err := nostrEvent.CheckSignature()
 	if err != nil || !ok {
-		relayLogger.Error("❌ Signature verification failed: %v", err)
+		utils.NewLogger("relay").Error("❌ Signature verification failed: %v", err)
 		return fmt.Errorf("signature verification failed: %v", err)
 	}
-	relayLogger.Debug("✅ Signature valid")
+	utils.NewLogger("relay").Debug("✅ Signature valid")
 	
-	relayLogger.Debug("✅ Event validated successfully")
+	utils.NewLogger("relay").Debug("✅ Event validated successfully")
 	return nil
 }
 

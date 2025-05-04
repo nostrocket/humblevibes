@@ -1,4 +1,4 @@
-.PHONY: all build clean run-relay run-relay-custom run-publisher run-publisher-custom run-publisher-interactive run-publisher-multi run-monitor run-forwarder run-forwarder-custom run-forwarder-relay run-reverse-forwarder run-reverse-forwarder-custom run-reverse-forwarder-discover run-export-content run-export-content-custom harvest-and-export harvest-and-export-custom test test-unit test-integration test-all test-forwarder
+.PHONY: all build clean run-relay run-relay-custom run-relay-timeout run-publisher run-publisher-custom run-publisher-interactive run-publisher-multi run-monitor run-forwarder run-forwarder-custom run-forwarder-relay run-reverse-forwarder run-reverse-forwarder-custom run-reverse-forwarder-discover run-export-content run-export-content-custom harvest-and-export harvest-and-export-custom test test-unit test-integration test-all test-forwarder
 
 # Binary output directory
 BIN_DIR=bin
@@ -10,6 +10,7 @@ MONITOR_BIN=$(BIN_DIR)/nostr-monitor
 FORWARDER_BIN=$(BIN_DIR)/nostr-forwarder
 REVERSE_FORWARDER_BIN=$(BIN_DIR)/nostr-reverse-forwarder
 EXPORT_CONTENT_BIN=$(BIN_DIR)/nostr-export-content
+TESTER_BIN=$(BIN_DIR)/nostr-tester
 
 # Build all binaries
 all: build
@@ -19,17 +20,32 @@ $(BIN_DIR):
 	mkdir -p $(BIN_DIR)
 
 # Build both relay and publisher
-build: $(BIN_DIR)
+build: $(BIN_DIR) relay publisher monitor forwarder reverse-forwarder export-content tester
+
+relay:
 	go build -o $(RELAY_BIN) ./cmd/relay
+
+publisher:
 	go build -o $(PUBLISHER_BIN) ./cmd/publisher
+
+monitor:
 	go build -o $(MONITOR_BIN) ./cmd/monitor
+
+forwarder:
 	go build -o $(FORWARDER_BIN) ./cmd/forwarder
+
+reverse-forwarder:
 	go build -o $(REVERSE_FORWARDER_BIN) ./cmd/reverse-forwarder
+
+export-content:
 	go build -o $(EXPORT_CONTENT_BIN) ./cmd/export-content
+
+tester:
+	go build -o $(TESTER_BIN) ./cmd/tester
 
 # Clean up binaries
 clean:
-	rm -f $(RELAY_BIN) $(PUBLISHER_BIN) $(MONITOR_BIN) $(FORWARDER_BIN) $(REVERSE_FORWARDER_BIN) $(EXPORT_CONTENT_BIN)
+	rm -f $(RELAY_BIN) $(PUBLISHER_BIN) $(MONITOR_BIN) $(FORWARDER_BIN) $(REVERSE_FORWARDER_BIN) $(EXPORT_CONTENT_BIN) $(TESTER_BIN)
 	rm -f test_nostr.db
 
 # Run the relay server
@@ -40,6 +56,11 @@ run-relay: $(RELAY_BIN)
 # Usage: make run-relay-custom PORT=8081
 run-relay-custom: $(RELAY_BIN)
 	$(RELAY_BIN) -port $(PORT)
+
+# Run the relay server with a specific timeout
+# Usage: make run-relay-timeout TIMEOUT=60
+run-relay-timeout: $(RELAY_BIN)
+	$(RELAY_BIN) -timeout $(TIMEOUT)
 
 # Run the publisher with default settings (single message)
 run-publisher: $(PUBLISHER_BIN)
@@ -141,6 +162,7 @@ install:
 	go install ./cmd/forwarder
 	go install ./cmd/reverse-forwarder
 	go install ./cmd/export-content
+	go install ./cmd/tester
 
 # Run a full validation test
 validate: build test-all
@@ -152,8 +174,9 @@ help:
 	@echo "  all                 - Build all binaries"
 	@echo "  build               - Build relay, publisher, and monitor binaries"
 	@echo "  clean               - Remove built binaries"
-	@echo "  run-relay           - Run the relay server"
+	@echo "  run-relay           - Run the relay server (no connection timeout by default)"
 	@echo "  run-relay-custom    - Run the relay server on a specific port"
+	@echo "  run-relay-timeout   - Run the relay server with a specific timeout"
 	@echo "  run-publisher       - Run the publisher (single message)"
 	@echo "  run-publisher-custom - Run the publisher with custom arguments"
 	@echo "  run-publisher-interactive - Run the publisher in interactive mode"

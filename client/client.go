@@ -7,10 +7,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"log"
 	"net"
+	"net/http"
 	"net/url"
+	"sync"
 	"time"
+	"context"
 
 	"github.com/btcsuite/btcd/btcec/v2"
 	"github.com/btcsuite/btcd/btcec/v2/schnorr"
@@ -26,6 +28,7 @@ type NostrClient struct {
 	privateKey *btcec.PrivateKey
 	publicKey  string
 	relayURL   string
+	mu         sync.Mutex
 }
 
 // Event represents a Nostr event
@@ -69,10 +72,23 @@ func NewNostrClient(relayURL string) (*NostrClient, error) {
 	}
 
 	// Connect to the relay
-	conn, _, err := websocket.DefaultDialer.Dial(u.String(), nil)
+	dialer := &websocket.Dialer{
+		HandshakeTimeout: 10 * time.Second,
+		ReadBufferSize:   1024 * 16,
+		WriteBufferSize:  1024 * 16,
+	}
+
+	// Set up connection parameters
+	header := http.Header{}
+	header.Add("Origin", "nostr-client")
+
+	conn, _, err := dialer.Dial(u.String(), header)
 	if err != nil {
 		return nil, err
 	}
+
+	// Improve connection stability by setting a large read limit and removing read deadline
+	conn.SetReadLimit(10 * 1024 * 1024) // 10MB read limit
 
 	// Generate a new private key
 	privateKey, err := generatePrivateKey()
@@ -113,10 +129,23 @@ func NewNostrClientWithKey(relayURL string, hexPrivateKey string) (*NostrClient,
 	}
 
 	// Connect to the relay
-	conn, _, err := websocket.DefaultDialer.Dial(u.String(), nil)
+	dialer := &websocket.Dialer{
+		HandshakeTimeout: 10 * time.Second,
+		ReadBufferSize:   1024 * 16,
+		WriteBufferSize:  1024 * 16,
+	}
+
+	// Set up connection parameters
+	header := http.Header{}
+	header.Add("Origin", "nostr-client")
+
+	conn, _, err := dialer.Dial(u.String(), header)
 	if err != nil {
 		return nil, err
 	}
+
+	// Improve connection stability by setting a large read limit and removing read deadline
+	conn.SetReadLimit(10 * 1024 * 1024) // 10MB read limit
 
 	// Parse the private key
 	privateKeyBytes, err := hex.DecodeString(hexPrivateKey)
@@ -313,7 +342,6 @@ func (c *NostrClient) PublishExistingEvent(event *Event) (bool, string, error) {
 			continue
 			
 		case "NOTICE":
-			// This is a notice from the relay
 			if len(response) >= 2 {
 				var notice string
 				if err := json.Unmarshal(response[1], &notice); err != nil {
@@ -422,36 +450,27 @@ func (c *NostrClient) GetPublicKey() string {
 
 // Connect establishes a WebSocket connection to the Nostr relay
 func (c *NostrClient) Connect() error {
-	clientLogger.Info("🔌 Connecting to relay: %s", c.relayURL)
-	
-	// Parse the relay URL
-	u, err := url.Parse(c.relayURL)
+	// Set up dialer with more robust timeout settings
+	dialer := &websocket.Dialer{
+		HandshakeTimeout: 10 * time.Second,
+		ReadBufferSize:   1024 * 16,
+		WriteBufferSize:  1024 * 16,
+	}
+
+	// Set up connection parameters
+	header := http.Header{}
+	header.Add("Origin", "nostr-client")
+
+	// Connect to the relay
+	conn, _, err := dialer.Dial(c.relayURL, header)
 	if err != nil {
-		return fmt.Errorf("invalid relay URL: %w", err)
+		return fmt.Errorf("failed to connect to %s: %w", c.relayURL, err)
 	}
-	
-	// Ensure the WebSocket scheme is used
-	switch u.Scheme {
-	case "http":
-		u.Scheme = "ws"
-	case "https":
-		u.Scheme = "wss"
-	case "ws", "wss":
-		// Already using WebSocket scheme
-	default:
-		return fmt.Errorf("unsupported URL scheme: %s", u.Scheme)
-	}
-	
-	// Connect to the WebSocket endpoint
-	clientLogger.Debug("Dialing WebSocket: %s", u.String())
-	conn, _, err := websocket.DefaultDialer.Dial(u.String(), nil)
-	if err != nil {
-		return fmt.Errorf("failed to connect to relay: %w", err)
-	}
+
+	// Improve connection stability by setting a large read limit and removing read deadline
+	conn.SetReadLimit(10 * 1024 * 1024) // 10MB read limit
 	
 	c.conn = conn
-	clientLogger.Info("✅ Connected to relay: %s", c.relayURL)
-	
 	return nil
 }
 
@@ -532,42 +551,96 @@ func (c *NostrClient) SubscribeToEvents(subscriptionID string, filters map[strin
 	// Start a goroutine to handle incoming events
 	go func() {
 		for {
-			_, messageBytes, err := c.conn.ReadMessage()
+			// Read the next message
+			_, msgBytes, err := c.conn.ReadMessage()
 			if err != nil {
-				log.Printf("Error reading from relay: %v", err)
+				// Notify about connection error but don't terminate the subscription immediately
+				// This allows the caller to handle reconnection
+				if websocket.IsCloseError(err, websocket.CloseGoingAway, websocket.CloseAbnormalClosure) {
+					clientLogger.Warn("WebSocket closed: %v", err)
+				} else {
+					clientLogger.Error("Error reading from relay: %v", err)
+				}
 				return
 			}
 
-			// Parse the message
-			var response []json.RawMessage
-			if err := json.Unmarshal(messageBytes, &response); err != nil {
-				log.Printf("Error parsing message: %v", err)
+			// Attempt to unmarshal the message
+			var msg []json.RawMessage
+			if err := json.Unmarshal(msgBytes, &msg); err != nil {
+				clientLogger.Warn("Error parsing message: %v", err)
 				continue
 			}
 
-			// Check if the message is an EVENT message
-			if len(response) < 3 {
+			// Check if the message is well-formed
+			if len(msg) < 2 {
+				clientLogger.Warn("Received malformed message with too few elements")
 				continue
 			}
 
-			var messageType string
-			if err := json.Unmarshal(response[0], &messageType); err != nil {
+			// Get the message type
+			var msgType string
+			if err := json.Unmarshal(msg[0], &msgType); err != nil {
+				clientLogger.Warn("Failed to parse message type: %v", err)
 				continue
 			}
 
-			if messageType == "EVENT" {
-				var subID string
-				if err := json.Unmarshal(response[1], &subID); err != nil {
+			// Handle different message types
+			switch msgType {
+			case "EVENT":
+				// Check if this is for our subscription
+				var eventSubID string
+				if err := json.Unmarshal(msg[1], &eventSubID); err != nil {
+					clientLogger.Warn("Failed to parse subscription ID: %v", err)
 					continue
 				}
 
+				if eventSubID != subscriptionID {
+					// Not for our subscription
+					continue
+				}
+
+				if len(msg) < 3 {
+					clientLogger.Warn("Malformed EVENT message, missing event data")
+					continue
+				}
+
+				// Parse the event
 				var event Event
-				if err := json.Unmarshal(response[2], &event); err != nil {
+				if err := json.Unmarshal(msg[2], &event); err != nil {
+					clientLogger.Warn("Failed to parse event: %v", err)
 					continue
 				}
 
-				// Process the event
-				log.Printf("Received event: %+v", event)
+				clientLogger.Debug("📦 Received event: %s", event.ID)
+
+				// Call the handler with the event
+				// handler(&event)
+
+			case "EOSE":
+				// End of stored events
+				var eoseSubID string
+				if err := json.Unmarshal(msg[1], &eoseSubID); err != nil {
+					clientLogger.Warn("Failed to parse EOSE subscription ID: %v", err)
+					continue
+				}
+
+				if eoseSubID == subscriptionID {
+					clientLogger.Info("🏁 End of stored events for subscription: %s", subscriptionID)
+				}
+
+			case "NOTICE":
+				if len(msg) >= 2 {
+					var notice string
+					if err := json.Unmarshal(msg[1], &notice); err != nil {
+						clientLogger.Warn("Failed to parse notice: %v", err)
+					} else {
+						clientLogger.Info("📢 NOTICE from relay: %s", notice)
+					}
+				}
+
+			default:
+				// Unknown message type
+				clientLogger.Debug("Received unknown message type: %s", msgType)
 			}
 		}
 	}()
@@ -576,81 +649,548 @@ func (c *NostrClient) SubscribeToEvents(subscriptionID string, filters map[strin
 }
 
 // SubscribeToEventsWithHandler subscribes to events matching the given filters and calls the handler for each event
-func (c *NostrClient) SubscribeToEventsWithHandler(subscriptionID string, filters map[string]interface{}, handler EventHandler) error {
-	// Create the REQ message
-	message := []interface{}{"REQ", subscriptionID, filters}
-
-	// Send the message to the relay
-	if err := c.conn.WriteJSON(message); err != nil {
-		return err
+func (c *NostrClient) SubscribeToEventsWithHandler(subscriptionID string, filters map[string]interface{}, handler func(*Event)) error {
+	clientLogger := utils.NewLogger("client")
+	
+	// Create request as JSON
+	reqMsg, err := json.Marshal([]interface{}{"REQ", subscriptionID, filters})
+	if err != nil {
+		return fmt.Errorf("failed to marshal subscription request: %w", err)
 	}
-
-	// Start a goroutine to handle incoming events
+	
+	// Write request to server
+	c.mu.Lock()
+	err = c.conn.WriteMessage(websocket.TextMessage, reqMsg)
+	c.mu.Unlock()
+	if err != nil {
+		clientLogger.Error("Failed to send subscription request: %v", err)
+		return fmt.Errorf("failed to send subscription request: %w", err)
+	}
+	clientLogger.Info("Sent subscription request: %s", string(reqMsg))
+	
+	// Setup a context with cancellation for coordinated shutdown
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	
+	// Set up a heartbeat ping to keep the connection alive
+	heartbeatTicker := time.NewTicker(20 * time.Second)
+	defer heartbeatTicker.Stop()
+	
+	heartbeatID := 0
+	
+	// Start a goroutine for regular heartbeats
 	go func() {
 		for {
-			_, messageBytes, err := c.conn.ReadMessage()
-			if err != nil {
-				log.Printf("Error reading from relay: %v", err)
+			select {
+			case <-ctx.Done():
 				return
-			}
-
-			// Parse the message
-			var response []json.RawMessage
-			if err := json.Unmarshal(messageBytes, &response); err != nil {
-				log.Printf("Error parsing message: %v", err)
-				continue
-			}
-
-			// Check if the message is an EVENT message
-			if len(response) < 3 {
-				continue
-			}
-
-			var messageType string
-			if err := json.Unmarshal(response[0], &messageType); err != nil {
-				continue
-			}
-
-			if messageType == "EVENT" {
-				var subID string
-				if err := json.Unmarshal(response[1], &subID); err != nil {
-					continue
-				}
-
-				// Only process events for this subscription
-				if subID != subscriptionID {
-					continue
-				}
-
-				var event Event
-				if err := json.Unmarshal(response[2], &event); err != nil {
-					continue
-				}
-
-				// Call the handler with the event
-				handler(&event)
-			} else if messageType == "EOSE" {
-				// End of stored events
-				var subID string
-				if err := json.Unmarshal(response[1], &subID); err != nil {
-					continue
-				}
-				
-				if subID == subscriptionID {
-					log.Printf("End of stored events for subscription %s", subscriptionID)
+			case <-heartbeatTicker.C:
+				heartbeatID++
+				pingID := fmt.Sprintf("heartbeat_%s_%d", subscriptionID, heartbeatID)
+				if err := c.SendPing(pingID); err != nil {
+					clientLogger.Warn("Failed to send heartbeat ping #%d: %v", heartbeatID, err)
+				} else {
+					clientLogger.Debug("Sent heartbeat ping #%d", heartbeatID)
 				}
 			}
 		}
 	}()
-
-	return nil
+	
+	// Create a read deadline ticker to periodically reset the deadline
+	readDeadlineTicker := time.NewTicker(30 * time.Second)
+	defer readDeadlineTicker.Stop()
+	
+	// Start a goroutine to manage read deadlines
+	go func() {
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-readDeadlineTicker.C:
+				// Set a read deadline to detect connection issues
+				c.mu.Lock()
+				err := c.conn.SetReadDeadline(time.Now().Add(60 * time.Second))
+				c.mu.Unlock()
+				if err != nil {
+					clientLogger.Warn("Failed to set read deadline: %v", err)
+				}
+			}
+		}
+	}()
+	
+	// Flag to track if an EOSE burst has been sent
+	eosePingsSent := false
+	
+	// Create a buffer to store incoming messages until they are processed
+	for {
+		// Read the next message
+		c.mu.Lock()
+		_, message, err := c.conn.ReadMessage()
+		c.mu.Unlock()
+		
+		if err != nil {
+			clientLogger.Error("Error reading from relay: %v", err)
+			// If we're past EOSE and still getting errors, this is a true connection issue
+			return fmt.Errorf("error reading from relay: %w", err)
+		}
+		
+		// Parse the message
+		var msg []json.RawMessage
+		if err := json.Unmarshal(message, &msg); err != nil {
+			clientLogger.Warn("Failed to parse message: %v", err)
+			continue
+		}
+		
+		// Check if the message is empty
+		if len(msg) == 0 {
+			clientLogger.Warn("Received empty message")
+			continue
+		}
+		
+		// Get the message type
+		var messageType string
+		if err := json.Unmarshal(msg[0], &messageType); err != nil {
+			clientLogger.Warn("Failed to parse message type: %v", err)
+			continue
+		}
+		
+		switch messageType {
+		case "EVENT":
+			// Check if the message contains enough elements
+			if len(msg) < 3 {
+				clientLogger.Warn("Received malformed EVENT message")
+				continue
+			}
+			
+			// Check if this event is for our subscription
+			var eventSubID string
+			if err := json.Unmarshal(msg[1], &eventSubID); err != nil {
+				clientLogger.Warn("Failed to parse EVENT subscription ID: %v", err)
+				continue
+			}
+			
+			// Skip events not for our subscription
+			if eventSubID != subscriptionID {
+				continue
+			}
+			
+			// Parse the event
+			var event Event
+			if err := json.Unmarshal(msg[2], &event); err != nil {
+				clientLogger.Warn("Failed to parse event: %v", err)
+				continue
+			}
+			
+			// Handle the event
+			handler(&event)
+			
+		case "EOSE":
+			// End of stored events
+			var eoseSubID string
+			if err := json.Unmarshal(msg[1], &eoseSubID); err != nil {
+				clientLogger.Warn("Failed to parse EOSE subscription ID: %v", err)
+				continue
+			}
+			if eoseSubID == subscriptionID {
+				clientLogger.Info("🏁 End of stored events for subscription: %s", subscriptionID)
+				
+				// Only send post-EOSE pings once
+				if !eosePingsSent {
+					eosePingsSent = true
+					
+					// Send an immediate ping burst after EOSE to ensure the connection stays open
+					go func() {
+						// Send 3 pings with short delays between them
+						for i := 0; i < 3; i++ {
+							select {
+							case <-ctx.Done():
+								return
+							case <-time.After(time.Duration(500*i) * time.Millisecond):
+								pingID := fmt.Sprintf("eose_ping_%s_%d", subscriptionID, i)
+								c.mu.Lock()
+								pingErr := c.conn.WriteMessage(websocket.TextMessage, []byte(fmt.Sprintf("[\"PING\",\"%s\"]", pingID)))
+								c.mu.Unlock()
+								if pingErr != nil {
+									clientLogger.Warn("Failed to send EOSE ping burst #%d: %v", i, pingErr)
+								} else {
+									clientLogger.Debug("Sent EOSE ping burst #%d", i)
+								}
+							}
+						}
+						
+						// Increase the heartbeat frequency after EOSE to keep the connection more stable
+						heartbeatTicker.Reset(10 * time.Second)
+					}()
+					
+					// Also send a REQ with limit:0 as a lightweight keep-alive request
+					go func() {
+						select {
+						case <-ctx.Done():
+							return
+						case <-time.After(1 * time.Second):
+							// Create a lightweight REQ that won't return any events
+							keepAliveReq, _ := json.Marshal([]interface{}{
+								"REQ", 
+								fmt.Sprintf("keep_alive_%s", subscriptionID), 
+								map[string]interface{}{
+									"limit": 0,
+									"since": time.Now().Unix(),
+								},
+							})
+							
+							c.mu.Lock()
+							keepAliveErr := c.conn.WriteMessage(websocket.TextMessage, keepAliveReq)
+							c.mu.Unlock()
+							
+							if keepAliveErr != nil {
+								clientLogger.Warn("Failed to send keep-alive REQ: %v", keepAliveErr)
+							} else {
+								clientLogger.Debug("Sent keep-alive REQ after EOSE")
+							}
+						}
+					}()
+				}
+			}
+			
+		case "NOTICE":
+			if len(msg) >= 2 {
+				var notice string
+				if err := json.Unmarshal(msg[1], &notice); err == nil {
+					clientLogger.Info("Received NOTICE from relay: %s", notice)
+				}
+			}
+			
+		case "OK":
+			if len(msg) >= 3 {
+				var okEventID string
+				var okStatus bool
+				var okMessage string
+				
+				if err := json.Unmarshal(msg[1], &okEventID); err == nil {
+					if err := json.Unmarshal(msg[2], &okStatus); err == nil {
+						if len(msg) >= 4 {
+							_ = json.Unmarshal(msg[3], &okMessage)
+						}
+						
+						if okStatus {
+							clientLogger.Info("Event %s accepted by relay", okEventID)
+						} else {
+							clientLogger.Warn("Event %s rejected by relay: %s", okEventID, okMessage)
+						}
+					}
+				}
+			}
+			
+		case "PONG":
+			if len(msg) >= 2 {
+				var pongID string
+				if err := json.Unmarshal(msg[1], &pongID); err == nil {
+					clientLogger.Debug("Received PONG: %s", pongID)
+				}
+			}
+			
+		default:
+			clientLogger.Warn("Received unknown message type: %s", messageType)
+		}
+		
+		// Reset read deadline after successful message processing
+		c.mu.Lock()
+		c.conn.SetReadDeadline(time.Time{})
+		c.mu.Unlock()
+	}
 }
 
-func truncateString(s string, length int) string {
-	if len(s) <= length {
-		return s
+// SubscribeToEventsWithHandlerAndEOSE subscribes to events based on the provided filters and invokes the handler function for each event
+// It also provides a callback when an EOSE message is received, which is useful for validating connections
+func (c *NostrClient) SubscribeToEventsWithHandlerAndEOSE(subscriptionID string, filters map[string]interface{}, handler func(*Event), eoseCallback func()) error {
+	clientLogger := utils.NewLogger("client")
+	
+	// Create request as JSON
+	reqMsg, err := json.Marshal([]interface{}{"REQ", subscriptionID, filters})
+	if err != nil {
+		return fmt.Errorf("failed to marshal subscription request: %w", err)
 	}
-	return s[:length]
+	
+	// Write request to server
+	c.mu.Lock()
+	err = c.conn.WriteMessage(websocket.TextMessage, reqMsg)
+	c.mu.Unlock()
+	if err != nil {
+		clientLogger.Error("Failed to send subscription request: %v", err)
+		return fmt.Errorf("failed to send subscription request: %w", err)
+	}
+	clientLogger.Info("Sent subscription request: %s", string(reqMsg))
+	
+	// Setup a context with cancellation for coordinated shutdown
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	
+	// Set up a heartbeat ping to keep the connection alive
+	heartbeatTicker := time.NewTicker(20 * time.Second)
+	defer heartbeatTicker.Stop()
+	
+	heartbeatID := 0
+	
+	// Start a goroutine for regular heartbeats
+	go func() {
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-heartbeatTicker.C:
+				heartbeatID++
+				pingID := fmt.Sprintf("heartbeat_%s_%d", subscriptionID, heartbeatID)
+				if err := c.SendPing(pingID); err != nil {
+					clientLogger.Warn("Failed to send heartbeat ping #%d: %v", heartbeatID, err)
+				} else {
+					clientLogger.Debug("Sent heartbeat ping #%d", heartbeatID)
+				}
+			}
+		}
+	}()
+	
+	// Create a read deadline ticker to periodically reset the deadline
+	readDeadlineTicker := time.NewTicker(30 * time.Second)
+	defer readDeadlineTicker.Stop()
+	
+	// Start a goroutine to manage read deadlines
+	go func() {
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-readDeadlineTicker.C:
+				// Set a read deadline to detect connection issues
+				c.mu.Lock()
+				err := c.conn.SetReadDeadline(time.Now().Add(60 * time.Second))
+				c.mu.Unlock()
+				if err != nil {
+					clientLogger.Warn("Failed to set read deadline: %v", err)
+				}
+			}
+		}
+	}()
+	
+	// Flag to track if an EOSE burst has been sent
+	eosePingsSent := false
+	
+	// Create a buffer to store incoming messages until they are processed
+	for {
+		// Read the next message
+		c.mu.Lock()
+		_, message, err := c.conn.ReadMessage()
+		c.mu.Unlock()
+		
+		if err != nil {
+			clientLogger.Error("Error reading from relay: %v", err)
+			// If we're past EOSE and still getting errors, this is a true connection issue
+			return fmt.Errorf("error reading from relay: %w", err)
+		}
+		
+		// Parse the message
+		var msg []json.RawMessage
+		if err := json.Unmarshal(message, &msg); err != nil {
+			clientLogger.Warn("Failed to parse message: %v", err)
+			continue
+		}
+		
+		// Check if the message is empty
+		if len(msg) == 0 {
+			clientLogger.Warn("Received empty message")
+			continue
+		}
+		
+		// Get the message type
+		var messageType string
+		if err := json.Unmarshal(msg[0], &messageType); err != nil {
+			clientLogger.Warn("Failed to parse message type: %v", err)
+			continue
+		}
+		
+		switch messageType {
+		case "EVENT":
+			// Check if the message contains enough elements
+			if len(msg) < 3 {
+				clientLogger.Warn("Received malformed EVENT message")
+				continue
+			}
+			
+			// Check if this event is for our subscription
+			var eventSubID string
+			if err := json.Unmarshal(msg[1], &eventSubID); err != nil {
+				clientLogger.Warn("Failed to parse EVENT subscription ID: %v", err)
+				continue
+			}
+			
+			// Skip events not for our subscription
+			if eventSubID != subscriptionID {
+				continue
+			}
+			
+			// Parse the event
+			var event Event
+			if err := json.Unmarshal(msg[2], &event); err != nil {
+				clientLogger.Warn("Failed to parse event: %v", err)
+				continue
+			}
+			
+			// Handle the event
+			handler(&event)
+			
+		case "EOSE":
+			// End of stored events
+			var eoseSubID string
+			if err := json.Unmarshal(msg[1], &eoseSubID); err != nil {
+				clientLogger.Warn("Failed to parse EOSE subscription ID: %v", err)
+				continue
+			}
+			if eoseSubID == subscriptionID {
+				clientLogger.Info("🏁 End of stored events for subscription: %s", subscriptionID)
+				
+				// Call the EOSE callback if provided
+				if eoseCallback != nil {
+					eoseCallback()
+				}
+				
+				// Only send post-EOSE pings once
+				if !eosePingsSent {
+					eosePingsSent = true
+					
+					// Send an immediate ping burst after EOSE to ensure the connection stays open
+					go func() {
+						// Send 3 pings with short delays between them
+						for i := 0; i < 3; i++ {
+							select {
+							case <-ctx.Done():
+								return
+							case <-time.After(time.Duration(500*i) * time.Millisecond):
+								pingID := fmt.Sprintf("eose_ping_%s_%d", subscriptionID, i)
+								c.mu.Lock()
+								pingErr := c.conn.WriteMessage(websocket.TextMessage, []byte(fmt.Sprintf("[\"PING\",\"%s\"]", pingID)))
+								c.mu.Unlock()
+								if pingErr != nil {
+									clientLogger.Warn("Failed to send EOSE ping burst #%d: %v", i, pingErr)
+								} else {
+									clientLogger.Debug("Sent EOSE ping burst #%d", i)
+								}
+							}
+						}
+						
+						// Increase the heartbeat frequency after EOSE to keep the connection more stable
+						heartbeatTicker.Reset(10 * time.Second)
+					}()
+					
+					// Also send a REQ with limit:0 as a lightweight keep-alive request
+					go func() {
+						select {
+						case <-ctx.Done():
+							return
+						case <-time.After(1 * time.Second):
+							// Create a lightweight REQ that won't return any events
+							keepAliveReq, _ := json.Marshal([]interface{}{
+								"REQ", 
+								fmt.Sprintf("keep_alive_%s", subscriptionID), 
+								map[string]interface{}{
+									"limit": 0,
+									"since": time.Now().Unix(),
+								},
+							})
+							
+							c.mu.Lock()
+							keepAliveErr := c.conn.WriteMessage(websocket.TextMessage, keepAliveReq)
+							c.mu.Unlock()
+							
+							if keepAliveErr != nil {
+								clientLogger.Warn("Failed to send keep-alive REQ: %v", keepAliveErr)
+							} else {
+								clientLogger.Debug("Sent keep-alive REQ after EOSE")
+							}
+						}
+					}()
+				}
+			}
+			
+		case "NOTICE":
+			if len(msg) >= 2 {
+				var notice string
+				if err := json.Unmarshal(msg[1], &notice); err == nil {
+					clientLogger.Info("Received NOTICE from relay: %s", notice)
+				}
+			}
+			
+		case "OK":
+			if len(msg) >= 3 {
+				var okEventID string
+				var okStatus bool
+				var okMessage string
+				
+				if err := json.Unmarshal(msg[1], &okEventID); err == nil {
+					if err := json.Unmarshal(msg[2], &okStatus); err == nil {
+						if len(msg) >= 4 {
+							_ = json.Unmarshal(msg[3], &okMessage)
+						}
+						
+						if okStatus {
+							clientLogger.Info("Event %s accepted by relay", okEventID)
+						} else {
+							clientLogger.Warn("Event %s rejected by relay: %s", okEventID, okMessage)
+						}
+					}
+				}
+			}
+			
+		case "PONG":
+			if len(msg) >= 2 {
+				var pongID string
+				if err := json.Unmarshal(msg[1], &pongID); err == nil {
+					clientLogger.Debug("Received PONG: %s", pongID)
+				}
+			}
+			
+		default:
+			clientLogger.Warn("Received unknown message type: %s", messageType)
+		}
+		
+		// Reset read deadline after successful message processing
+		c.mu.Lock()
+		c.conn.SetReadDeadline(time.Time{})
+		c.mu.Unlock()
+	}
+}
+
+// SendPing sends a lightweight ping message to keep the WebSocket connection alive
+// It uses a "REQ" message with a filter that won't match any events (limit:0)
+// This functions as a keep-alive mechanism without requesting any actual events
+func (c *NostrClient) SendPing(pingID string) error {
+	// Create a ping filter with limit:0 so no events will be returned
+	pingFilter := map[string]interface{}{
+		"limit": 0,
+		"kinds": []int{0}, // Use kind 0 (metadata) for pings as it's common but innocuous
+	}
+
+	// Create and send the REQ message
+	message := []interface{}{"REQ", pingID, pingFilter}
+	
+	// Log the ping for debugging
+	clientLogger.Debug("Sending keep-alive ping with ID: %s", pingID)
+	
+	// Set a write deadline for the ping
+	if err := c.conn.SetWriteDeadline(time.Now().Add(10 * time.Second)); err != nil {
+		clientLogger.Warn("Failed to set write deadline for ping: %v", err)
+	}
+	
+	// Send the ping as a REQ
+	if err := c.conn.WriteJSON(message); err != nil {
+		clientLogger.Error("Failed to send ping: %v", err)
+		return err
+	}
+	
+	// Reset write deadline
+	if err := c.conn.SetWriteDeadline(time.Time{}); err != nil {
+		clientLogger.Warn("Failed to reset write deadline after ping: %v", err)
+	}
+	
+	return nil
 }
 
 // Subscribe subscribes to events from the relay based on the provided filters
@@ -677,30 +1217,32 @@ func (c *NostrClient) Subscribe(filters []map[string]interface{}, eventHandler f
 			// Read the next message
 			_, msgBytes, err := c.conn.ReadMessage()
 			if err != nil {
+				// Notify about connection error but don't terminate the subscription immediately
+				// This allows the caller to handle reconnection
 				clientLogger.Error("Error reading from websocket: %v", err)
 				return
 			}
-			
+
 			// Attempt to unmarshal the message
 			var msg []json.RawMessage
 			if err := json.Unmarshal(msgBytes, &msg); err != nil {
 				clientLogger.Warn("Failed to parse message: %v", err)
 				continue
 			}
-			
+
 			// Check if the message is well-formed
 			if len(msg) < 2 {
 				clientLogger.Warn("Received malformed message with too few elements")
 				continue
 			}
-			
+
 			// Get the message type
 			var msgType string
 			if err := json.Unmarshal(msg[0], &msgType); err != nil {
 				clientLogger.Warn("Failed to parse message type: %v", err)
 				continue
 			}
-			
+
 			// Handle different message types
 			switch msgType {
 			case "EVENT":
@@ -710,29 +1252,29 @@ func (c *NostrClient) Subscribe(filters []map[string]interface{}, eventHandler f
 					clientLogger.Warn("Failed to parse subscription ID: %v", err)
 					continue
 				}
-				
+
 				if eventSubID != subscriptionID {
 					// Not for our subscription
 					continue
 				}
-				
+
 				if len(msg) < 3 {
 					clientLogger.Warn("Malformed EVENT message, missing event data")
 					continue
 				}
-				
+
 				// Parse the event
 				var event Event
 				if err := json.Unmarshal(msg[2], &event); err != nil {
 					clientLogger.Warn("Failed to parse event: %v", err)
 					continue
 				}
-				
+
 				clientLogger.Debug("📦 Received event: %s", event.ID)
-				
+
 				// Call the event handler
 				eventHandler(&event)
-				
+
 			case "EOSE":
 				// End of stored events
 				var eoseSubID string
@@ -740,11 +1282,11 @@ func (c *NostrClient) Subscribe(filters []map[string]interface{}, eventHandler f
 					clientLogger.Warn("Failed to parse EOSE subscription ID: %v", err)
 					continue
 				}
-				
+
 				if eoseSubID == subscriptionID {
 					clientLogger.Info("🏁 End of stored events for subscription: %s", subscriptionID)
 				}
-				
+
 			case "NOTICE":
 				if len(msg) >= 2 {
 					var notice string
@@ -754,7 +1296,7 @@ func (c *NostrClient) Subscribe(filters []map[string]interface{}, eventHandler f
 						clientLogger.Info("📢 NOTICE from relay: %s", notice)
 					}
 				}
-				
+
 			default:
 				// Unknown message type
 				clientLogger.Debug("Received unknown message type: %s", msgType)
@@ -780,4 +1322,11 @@ func generateSubscriptionID() string {
 	bytes := make([]byte, 16)
 	rand.Read(bytes)
 	return hex.EncodeToString(bytes)
+}
+
+func truncateString(s string, length int) string {
+	if len(s) <= length {
+		return s
+	}
+	return s[:length]
 }
