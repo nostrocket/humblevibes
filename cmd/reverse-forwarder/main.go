@@ -42,6 +42,7 @@ type ReverseForwarder struct {
 	events       chan *client.Event
 	wg           sync.WaitGroup
 	stopChan     chan struct{}
+	rateLimiters []*time.Ticker
 }
 
 // NewReverseForwarder creates a new reverse forwarder with the given configuration
@@ -133,16 +134,41 @@ func (rf *ReverseForwarder) Start() error {
 	
 	logger.Info("Successfully validated connection to source relay: %s", rf.config.SourceRelay)
 
-	// Now connect to all target relays
+	// Now connect to all target relays concurrently
+	var targetMutex sync.Mutex
+	var connectWg sync.WaitGroup
+	
+	// Create a channel for clients as they're connected
+	relayCount := len(rf.config.TargetRelays)
+	connectWg.Add(relayCount)
+	
+	logger.Info("Connecting to %d target relays concurrently...", relayCount)
+	
 	for _, relayURL := range rf.config.TargetRelays {
-		logger.Info("Connecting to target relay: %s", relayURL)
-		targetClient, err := client.NewNostrClient(relayURL)
-		if err != nil {
-			logger.Warn("Failed to connect to target relay %s: %v", relayURL, err)
-			continue
-		}
-		rf.targetClients = append(rf.targetClients, targetClient)
+		// Launch a goroutine for each relay connection
+		go func(url string) {
+			defer connectWg.Done()
+			
+			logger.Info("Connecting to target relay: %s", url)
+			targetClient, err := client.NewNostrClient(url)
+			if err != nil {
+				logger.Warn("Failed to connect to target relay %s: %v", url, err)
+				return
+			}
+			
+			// Safely append to the slice of target clients
+			targetMutex.Lock()
+			rf.targetClients = append(rf.targetClients, targetClient)
+			// Create a rate limiter for this relay (1 event per second)
+			rf.rateLimiters = append(rf.rateLimiters, time.NewTicker(1*time.Second))
+			targetMutex.Unlock()
+			
+			logger.Info("Successfully connected to target relay: %s", url)
+		}(relayURL)
 	}
+	
+	// Wait for all connection attempts to complete
+	connectWg.Wait()
 	
 	if len(rf.targetClients) == 0 {
 		rf.sourceClient.Close()
@@ -172,19 +198,30 @@ func (rf *ReverseForwarder) Start() error {
 // Stop disconnects from relays and stops forwarding
 func (rf *ReverseForwarder) Stop() {
 	logger.Info("Stopping reverse forwarder...")
-	close(rf.stopChan)
 	
-	// Wait for all goroutines to finish
-	rf.wg.Wait()
+	// Stop the keep-alive mechanism
+	if rf.config.KeepAlive {
+		logger.Info("Stopping keep-alive mechanism")
+		close(rf.stopChan)
+	}
 	
-	// Close all connections
+	// Close the source client
 	if rf.sourceClient != nil {
 		rf.sourceClient.Close()
 	}
 	
+	// Close all target clients
 	for _, client := range rf.targetClients {
 		client.Close()
 	}
+	
+	// Stop all rate limiters
+	for _, rateLimiter := range rf.rateLimiters {
+		rateLimiter.Stop()
+	}
+	
+	// Wait for all goroutines to finish
+	rf.wg.Wait()
 	
 	logger.Info("Reverse forwarder stopped")
 }
@@ -398,6 +435,14 @@ func (rf *ReverseForwarder) forwardEvents(events []*client.Event) {
 			localSuccess := 0
 			
 			for _, event := range eventBatch {
+				// Wait for the rate limiter ticker to ensure we don't exceed one event per second
+				if idx < len(rf.rateLimiters) {
+					<-rf.rateLimiters[idx].C
+				} else {
+					// Fallback sleep if rate limiter isn't available for some reason
+					time.Sleep(1 * time.Second)
+				}
+				
 				success, message, err := clientInstance.PublishExistingEvent(event)
 				
 				if err != nil {
