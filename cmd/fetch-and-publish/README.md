@@ -1,10 +1,10 @@
-# Nostr Forwarder
+# Fetch and Publish
 
 A utility to subscribe to external relays and forward events to a target relay.
 
 ## Overview
 
-The forwarder program connects to one or more source relays, subscribes to events matching specified filters, and forwards those events to a target relay. This is useful for relay federation, event harvesting, and creating specialized relay networks.
+The fetch-and-publish program connects to one or more source relays, subscribes to events matching specified filters, and forwards those events to a target relay. This is useful for relay federation, event harvesting, and creating specialized relay networks.
 
 ## Features
 
@@ -18,7 +18,7 @@ The forwarder program connects to one or more source relays, subscribes to event
 ## Usage
 
 ```
-./forwarder [options]
+./fetch-and-publish [options]
 ```
 
 ### Options
@@ -34,11 +34,11 @@ The forwarder program connects to one or more source relays, subscribes to event
 ## Example
 
 ```
-./forwarder -sources wss://relay1.com/ws,wss://relay2.com/ws -target ws://localhost:8080/ws -kinds 1,4 -log
+./fetch-and-publish -sources wss://relay1.com/ws,wss://relay2.com/ws -target ws://localhost:8080/ws -kinds 1,4 -log
 ```
 
 ## Notes
 
-- The forwarder validates events before forwarding them
+- The program validates events before forwarding them
 - It maintains persistent connections to both source and target relays
 - The program handles network interruptions gracefully with automatic reconnection
