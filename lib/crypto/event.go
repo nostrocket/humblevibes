@@ -63,6 +63,10 @@ func VerifySignature(event *Event) error {
 		return fmt.Errorf("invalid public key format: %v", err)
 	}
 
+	// Add the 0x02 prefix byte to make a compressed public key
+	// This is needed because GetPublicKey strips this byte when encoding
+	pubKeyBytesWithPrefix := append([]byte{0x02}, pubKeyBytes...)
+
 	// Decode the signature
 	sigBytes, err := hex.DecodeString(event.Sig)
 	if err != nil {
@@ -76,7 +80,7 @@ func VerifySignature(event *Event) error {
 	}
 
 	// Parse the public key
-	pubKey, err := btcec.ParsePubKey(pubKeyBytes)
+	pubKey, err := btcec.ParsePubKey(pubKeyBytesWithPrefix)
 	if err != nil {
 		return fmt.Errorf("failed to parse public key: %v", err)
 	}

@@ -214,7 +214,8 @@ func TestValidateEvent(t *testing.T) {
 
 func TestVerifySignature(t *testing.T) {
 	testLogger.TestInfo("🧪 Test: VerifySignature")
-	// Create a private key for testing
+
+	// Generate a private key
 	privateKey, err := crypto.GeneratePrivateKey()
 	if err != nil {
 		t.Fatalf("❌ Failed to generate private key: %v", err)
@@ -230,11 +231,11 @@ func TestVerifySignature(t *testing.T) {
 		PubKey:    pubKey,
 		CreatedAt: 1617932400,
 		Kind:      1,
-		Tags:      [][]string{},
+		Tags:      [][]string{{"e", "123456789abcdef"}},
 		Content:   "Hello, world!",
 	}
 
-	// Convert to crypto.Event for ID computation
+	// Convert to crypto.Event
 	cryptoEvent := &crypto.Event{
 		PubKey:    event.PubKey,
 		CreatedAt: event.CreatedAt,
@@ -243,7 +244,7 @@ func TestVerifySignature(t *testing.T) {
 		Content:   event.Content,
 	}
 
-	// Compute the ID
+	// Compute the event ID
 	id, err := crypto.ComputeEventID(cryptoEvent)
 	if err != nil {
 		t.Fatalf("❌ Failed to compute event ID: %v", err)
@@ -263,7 +264,7 @@ func TestVerifySignature(t *testing.T) {
 	event.Sig = signature
 	cryptoEvent.Sig = signature
 
-	// Verify the signature
+	// Directly use the crypto package for verification
 	err = crypto.VerifySignature(cryptoEvent)
 	if err != nil {
 		t.Errorf("❌ Signature verification failed: %v", err)
@@ -277,6 +278,6 @@ func TestVerifySignature(t *testing.T) {
 	if err == nil {
 		t.Errorf("❌ Expected signature verification to fail with invalid signature")
 	} else {
-		testLogger.TestInfo("✅ Signature verification failed with invalid signature")
+		testLogger.TestInfo("✅ Signature verification failed with invalid signature as expected: %v", err)
 	}
 }
