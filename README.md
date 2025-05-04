@@ -9,23 +9,23 @@ A simple Nostr relay and client implementation in Go with SQLite storage.
 - **Monitor**: Tool to track database changes in real-time
 - **Forwarder**: Tool to subscribe to external relays and forward events to your local relay
 - **Content Export**: Tool to export event content from specific authors to text files
-- **nostr-broadcast**: Tool to broadcast a Nostr event to all online relays listed on nostr.watch
+- **Broadcast**: Tool to broadcast a Nostr event to all online relays listed on nostr.watch
 
 ## Quick Start
 
 Build all components:
 ```bash
-make build
+make all
 ```
 
 Run the relay:
 ```bash
-make run-relay
+./bin/relay
 ```
 
 Publish a note:
 ```bash
-make run-publisher
+./bin/publisher -relay ws://localhost:8080/ws -content "Hello, Nostr!" -kind 1
 ```
 
 Monitor database changes:
@@ -47,17 +47,46 @@ make run-export-content-custom PUBKEY=3bf0c63fcb93463407af97a5e5ee64fa883d107ef9
 
 Run relay on a specific port:
 ```bash
-make run-relay-custom PORT=8090
+./bin/relay -port 8090
 ```
 
 Publish multiple notes:
 ```bash
-make run-publisher-custom ARGS="-num 5"
+./bin/publisher -relay ws://localhost:8080/ws -content "Hello, Nostr!" -kind 1 -num 5
 ```
 
 Interactive publisher mode:
 ```bash
-make run-publisher-interactive
+./bin/publisher -interactive
+```
+
+## Run the relay
+
+```bash
+# Build the relay
+make relay
+
+# Run with default settings (port 8080, nostr.db)
+./bin/relay
+
+# Run with custom port
+./bin/relay -port 9000
+
+# Run with custom database
+./bin/relay -db custom_nostr.db
+```
+
+## Publish events
+
+```bash
+# Build the publisher
+make publisher
+
+# Publish a simple note
+./bin/publisher -relay ws://localhost:8080/ws -content "Hello, Nostr!" -kind 1
+
+# Run in interactive mode
+./bin/publisher -interactive
 ```
 
 ## Forwarder Options
@@ -95,20 +124,20 @@ make run-forwarder-relay SOURCE="ws://relay.example.com/ws" TARGET="ws://localho
 # Forward from multiple relays to a custom target with additional filters
 make run-forwarder-relay SOURCE="ws://relay1.com/ws,ws://relay2.com/ws" TARGET="ws://custom-relay.com/ws" ARGS="-kinds 1,4 -log"
 
-## nostr-broadcast
+## Broadcast
 
 Broadcast a Nostr event to all online relays listed on nostr.watch.
 
 ### Build
 
 ```
-make bin/nostr-broadcast
+make bin/broadcast
 ```
 
 ### Usage
 
 ```
-./bin/nostr-broadcast <event-id>
+./bin/broadcast <event-id>
 ```
 
 - Retrieves the event from `nostr.db` by event ID.

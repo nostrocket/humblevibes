@@ -18,7 +18,7 @@ The content export program retrieves events from a Nostr database and exports th
 ## Usage
 
 ```
-./nostr-export-content [options]
+./export-content [options]
 ```
 
 ### Options
@@ -35,7 +35,7 @@ The content export program retrieves events from a Nostr database and exports th
 ## Example
 
 ```
-./nostr-export-content -db ./nostr.db -pubkey npub1... -kinds 1,30023 -output author_notes.txt
+./export-content -db ./nostr.db -pubkey npub1... -kinds 1,30023 -output author_notes.txt
 ```
 
 ## Notes

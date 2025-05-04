@@ -18,7 +18,7 @@ The tester program provides a suite of tests to verify the functionality and com
 ## Usage
 
 ```
-./nostr-tester [options]
+./tester [options]
 ```
 
 ### Options
@@ -32,7 +32,7 @@ The tester program provides a suite of tests to verify the functionality and com
 ## Example
 
 ```
-./nostr-tester -relay ws://localhost:8080/ws -tests basic,subscription,performance -verbose
+./tester -relay ws://localhost:8080/ws -tests basic,subscription,performance -verbose
 ```
 
 ## Test Categories

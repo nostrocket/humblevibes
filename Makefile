@@ -4,13 +4,13 @@
 BIN_DIR=bin
 
 # Binary output names
-RELAY_BIN=$(BIN_DIR)/nostr-relay
-PUBLISHER_BIN=$(BIN_DIR)/nostr-publisher
-MONITOR_BIN=$(BIN_DIR)/nostr-monitor
-FORWARDER_BIN=$(BIN_DIR)/nostr-forwarder
-EXPORT_CONTENT_BIN=$(BIN_DIR)/nostr-export-content
-TESTER_BIN=$(BIN_DIR)/nostr-tester
-BROADCAST_BIN=$(BIN_DIR)/nostr-broadcast
+RELAY_BIN=$(BIN_DIR)/relay
+PUBLISHER_BIN=$(BIN_DIR)/publisher
+MONITOR_BIN=$(BIN_DIR)/monitor
+FORWARDER_BIN=$(BIN_DIR)/forwarder
+EXPORT_CONTENT_BIN=$(BIN_DIR)/export-content
+TESTER_BIN=$(BIN_DIR)/tester
+BROADCAST_BIN=$(BIN_DIR)/broadcast
 
 # Create bin directory if it doesn't exist
 $(BIN_DIR):

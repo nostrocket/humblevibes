@@ -18,7 +18,7 @@ The forwarder program connects to one or more source relays, subscribes to event
 ## Usage
 
 ```
-./nostr-forwarder [options]
+./forwarder [options]
 ```
 
 ### Options
@@ -34,7 +34,7 @@ The forwarder program connects to one or more source relays, subscribes to event
 ## Example
 
 ```
-./nostr-forwarder -sources wss://relay1.com/ws,wss://relay2.com/ws -target ws://localhost:8080/ws -kinds 1,4 -log
+./forwarder -sources wss://relay1.com/ws,wss://relay2.com/ws -target ws://localhost:8080/ws -kinds 1,4 -log
 ```
 
 ## Notes

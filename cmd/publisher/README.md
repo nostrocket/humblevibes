@@ -18,7 +18,7 @@ The publisher program allows users to create, sign, and publish Nostr events to 
 ## Usage
 
 ```
-./nostr-publisher [options]
+./publisher [options]
 ```
 
 ### Options
@@ -34,12 +34,12 @@ The publisher program allows users to create, sign, and publish Nostr events to 
 
 ### Publish a text note
 ```
-./nostr-publisher -relay wss://relay.example.com/ws -key <private-key> -content "Hello Nostr!" -kind 1
+./publisher -relay wss://relay.example.com/ws -key <private-key> -content "Hello Nostr!" -kind 1
 ```
 
 ### Interactive mode
 ```
-./nostr-publisher -interactive
+./publisher -interactive
 ```
 
 ## Notes

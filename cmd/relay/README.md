@@ -18,7 +18,7 @@ This program implements a Nostr relay server that validates, stores, and serves 
 ## Usage
 
 ```
-./nostr-relay [options]
+./relay [options]
 ```
 
 ### Options
@@ -31,7 +31,7 @@ This program implements a Nostr relay server that validates, stores, and serves 
 ## Example
 
 ```
-./nostr-relay -port 9000 -db custom_nostr.db -log
+./relay -port 9000 -db custom_nostr.db -log
 ```
 
 ## Notes

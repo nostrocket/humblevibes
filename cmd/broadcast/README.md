@@ -18,13 +18,13 @@ The broadcast program retrieves an event from the local `nostr.db` database and 
 ## Usage
 
 ```
-./nostr-broadcast <event-id>
+./broadcast <event-id>
 ```
 
 ## Example
 
 ```
-./nostr-broadcast 3bf7c38639c09128ce5d95b3e0e8f8ade1a9f4d2d1534880302eec34c3f5a58e
+./broadcast 3bf7c38639c09128ce5d95b3e0e8f8ade1a9f4d2d1534880302eec34c3f5a58e
 ```
 
 ## Output

@@ -17,7 +17,7 @@ The monitor program connects to a Nostr database and provides real-time updates 
 ## Usage
 
 ```
-./nostr-monitor [options]
+./monitor [options]
 ```
 
 ### Options
@@ -32,7 +32,7 @@ The monitor program connects to a Nostr database and provides real-time updates 
 ## Example
 
 ```
-./nostr-monitor -db ./nostr.db -kinds 1,4 -search "nostr" -refresh 2
+./monitor -db ./nostr.db -kinds 1,4 -search "nostr" -refresh 2
 ```
 
 ## Notes
