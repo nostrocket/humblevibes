@@ -1,4 +1,4 @@
-.PHONY: all build clean run-relay run-relay-custom run-publisher run-publisher-custom run-publisher-interactive run-publisher-multi run-monitor run-forwarder run-forwarder-custom run-forwarder-relay run-export-content run-export-content-custom harvest-and-export harvest-and-export-custom test test-unit test-integration test-all test-forwarder
+.PHONY: all build clean run-relay run-relay-custom run-publisher run-publisher-custom run-publisher-interactive run-publisher-multi run-monitor run-forwarder run-forwarder-custom run-forwarder-relay run-reverse-forwarder run-reverse-forwarder-custom run-reverse-forwarder-discover run-export-content run-export-content-custom harvest-and-export harvest-and-export-custom test test-unit test-integration test-all test-forwarder
 
 # Binary output directory
 BIN_DIR=bin
@@ -8,6 +8,7 @@ RELAY_BIN=$(BIN_DIR)/nostr-relay
 PUBLISHER_BIN=$(BIN_DIR)/nostr-publisher
 MONITOR_BIN=$(BIN_DIR)/nostr-monitor
 FORWARDER_BIN=$(BIN_DIR)/nostr-forwarder
+REVERSE_FORWARDER_BIN=$(BIN_DIR)/nostr-reverse-forwarder
 EXPORT_CONTENT_BIN=$(BIN_DIR)/nostr-export-content
 
 # Build all binaries
@@ -23,11 +24,12 @@ build: $(BIN_DIR)
 	go build -o $(PUBLISHER_BIN) ./cmd/publisher
 	go build -o $(MONITOR_BIN) ./cmd/monitor
 	go build -o $(FORWARDER_BIN) ./cmd/forwarder
+	go build -o $(REVERSE_FORWARDER_BIN) ./cmd/reverse-forwarder
 	go build -o $(EXPORT_CONTENT_BIN) ./cmd/export-content
 
 # Clean up binaries
 clean:
-	rm -f $(RELAY_BIN) $(PUBLISHER_BIN) $(MONITOR_BIN) $(FORWARDER_BIN) $(EXPORT_CONTENT_BIN)
+	rm -f $(RELAY_BIN) $(PUBLISHER_BIN) $(MONITOR_BIN) $(FORWARDER_BIN) $(REVERSE_FORWARDER_BIN) $(EXPORT_CONTENT_BIN)
 	rm -f test_nostr.db
 
 # Run the relay server
@@ -73,6 +75,20 @@ run-forwarder-custom: $(FORWARDER_BIN)
 # Usage: make run-forwarder-relay SOURCE="ws://example.com/ws" TARGET="ws://localhost:9000/ws"
 run-forwarder-relay: $(FORWARDER_BIN)
 	$(FORWARDER_BIN) -sources "$(SOURCE)" -target "$(TARGET)" $(ARGS)
+
+# Run the reverse forwarder with default settings
+run-reverse-forwarder: $(REVERSE_FORWARDER_BIN)
+	$(REVERSE_FORWARDER_BIN) -source "ws://localhost:8080/ws" $(ARGS)
+
+# Run the reverse forwarder with custom arguments
+# Usage: make run-reverse-forwarder-custom ARGS="-source ws://example.com/ws -targets ws://relay1.com/ws,ws://relay2.com/ws"
+run-reverse-forwarder-custom: $(REVERSE_FORWARDER_BIN)
+	$(REVERSE_FORWARDER_BIN) $(ARGS)
+
+# Run the reverse forwarder with specific source and discover target relays
+# Usage: make run-reverse-forwarder-discover SOURCE="ws://example.com/ws" RELAYS=20
+run-reverse-forwarder-discover: $(REVERSE_FORWARDER_BIN)
+	$(REVERSE_FORWARDER_BIN) -source "$(SOURCE)" -relays $(RELAYS) $(ARGS)
 
 # Run the content export tool
 run-export-content: $(EXPORT_CONTENT_BIN)
@@ -123,6 +139,7 @@ install:
 	go install ./cmd/publisher
 	go install ./cmd/monitor
 	go install ./cmd/forwarder
+	go install ./cmd/reverse-forwarder
 	go install ./cmd/export-content
 
 # Run a full validation test
@@ -145,6 +162,9 @@ help:
 	@echo "  run-forwarder       - Run the forwarder with default settings"
 	@echo "  run-forwarder-custom - Run the forwarder with custom arguments"
 	@echo "  run-forwarder-relay - Run the forwarder with specific source and target relays"
+	@echo "  run-reverse-forwarder - Run the reverse forwarder with default settings"
+	@echo "  run-reverse-forwarder-custom - Run the reverse forwarder with custom arguments"
+	@echo "  run-reverse-forwarder-discover - Run the reverse forwarder with a source relay and discover targets"
 	@echo "  run-export-content  - Run the content export tool"
 	@echo "  run-export-content-custom - Run the content export tool with specific pubkey and options"
 	@echo "  harvest-and-export  - Harvest content using the existing database with dual-phase relay discovery"
