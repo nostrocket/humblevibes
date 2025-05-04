@@ -4,8 +4,8 @@ A simple Nostr relay and client implementation in Go with SQLite storage.
 
 ## Components
 
-- **Relay**: WebSocket server that validates and stores Nostr events
-- **Publisher**: Command-line tool to publish events to relays
+- **Relay**: Nostr relay server with SQLite backend
+- **Publisher**: Tool to publish events to relays
 - **Monitor**: Tool to track database changes in real-time
 - **Forwarder**: Tool to subscribe to external relays and forward events to your local relay
 - **Content Export**: Tool to export event content from specific authors to text files
