@@ -24,26 +24,35 @@ type Event struct {
 
 // ComputeEventID computes the ID of an event according to the Nostr protocol
 func ComputeEventID(event *Event) (string, error) {
+	// Serialize outputs a byte array that can be hashed to produce the event ID
+	serialized := serializeEvent(event)
+	
+	// Compute SHA256 hash
+	hash := sha256.Sum256(serialized)
+	return hex.EncodeToString(hash[:]), nil
+}
+
+// serializeEvent outputs a byte array that can be hashed to produce the event ID
+func serializeEvent(evt *Event) []byte {
 	// Create a JSON array with the required fields in the specific order
 	// [0, <pubkey>, <created_at>, <kind>, <tags>, <content>]
 	eventArray := []interface{}{
 		0,
-		event.PubKey,
-		event.CreatedAt,
-		event.Kind,
-		event.Tags,
-		event.Content,
+		evt.PubKey,
+		evt.CreatedAt,
+		evt.Kind,
+		evt.Tags,
+		evt.Content,
 	}
 
 	// Serialize to JSON
 	serialized, err := json.Marshal(eventArray)
 	if err != nil {
-		return "", err
+		// This should never happen for valid events
+		return []byte{}
 	}
 
-	// Compute SHA256 hash
-	hash := sha256.Sum256(serialized)
-	return hex.EncodeToString(hash[:]), nil
+	return serialized
 }
 
 // VerifySignature verifies the signature of an event
@@ -66,9 +75,8 @@ func VerifySignature(event *Event) error {
 		return fmt.Errorf("invalid ID format: %v", err)
 	}
 
-	// Parse the public key - Nostr uses compressed secp256k1 public keys without prefix byte
-	// We need to add the 0x02 prefix byte for parsing
-	pubKey, err := btcec.ParsePubKey(append([]byte{0x02}, pubKeyBytes...))
+	// Parse the public key
+	pubKey, err := btcec.ParsePubKey(pubKeyBytes)
 	if err != nil {
 		return fmt.Errorf("failed to parse public key: %v", err)
 	}

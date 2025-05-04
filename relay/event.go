@@ -7,8 +7,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/gareth/go-nostr-relay/lib/crypto"
 	"github.com/gareth/go-nostr-relay/lib/utils"
+	"github.com/nbd-wtf/go-nostr"
 )
 
 var (
@@ -137,23 +137,20 @@ func validateEvent(event *Event) error {
 		return errors.New("missing sig")
 	}
 	
-	// Compute the event ID
-	cryptoEvent := &crypto.Event{
+	// Convert our internal Event to nbd-wtf/go-nostr Event
+	nostrEvent := &nostr.Event{
+		ID:        event.ID,
 		PubKey:    event.PubKey,
-		CreatedAt: event.CreatedAt,
+		CreatedAt: nostr.Timestamp(event.CreatedAt),
 		Kind:      event.Kind,
-		Tags:      event.Tags,
+		Tags:      convertTags(event.Tags),
 		Content:   event.Content,
+		Sig:       event.Sig,
 	}
 	
-	computedID, err := crypto.ComputeEventID(cryptoEvent)
-	if err != nil {
-		relayLogger.Error("❌ Failed to compute event ID: %v", err)
-		return fmt.Errorf("failed to compute event ID: %v", err)
-	}
-	
-	// Verify the event ID
-	if computedID != event.ID {
+	// Verify the event ID using the nbd-wtf/go-nostr library
+	ok := nostrEvent.CheckID()
+	if !ok {
 		// Create a unique fingerprint for this event's content
 		// This identifies the event regardless of its ID
 		fingerprint := fmt.Sprintf("%s:%d:%d:%s", 
@@ -167,6 +164,9 @@ func validateEvent(event *Event) error {
 			mismatchedEvents[fingerprint] = true
 		}
 		mismatchedEventsMutex.Unlock()
+		
+		// Get computed ID from the event
+		computedID := nostrEvent.GetID()
 		
 		// Always log the basic error message
 		relayLogger.Error("❌ ID mismatch: computed=%s vs. provided=%s", computedID, event.ID)
@@ -205,10 +205,9 @@ func validateEvent(event *Event) error {
 	}
 	relayLogger.Debug("✅ Event ID valid")
 	
-	// Verify the signature
-	cryptoEvent.ID = event.ID
-	cryptoEvent.Sig = event.Sig
-	if err := crypto.VerifySignature(cryptoEvent); err != nil {
+	// Verify the signature using the nbd-wtf/go-nostr library
+	ok, err := nostrEvent.CheckSignature()
+	if err != nil || !ok {
 		relayLogger.Error("❌ Signature verification failed: %v", err)
 		return fmt.Errorf("signature verification failed: %v", err)
 	}
@@ -216,6 +215,15 @@ func validateEvent(event *Event) error {
 	
 	relayLogger.Debug("✅ Event validated successfully")
 	return nil
+}
+
+// Helper function to convert our tag format to nbd-wtf/go-nostr format
+func convertTags(tags [][]string) nostr.Tags {
+	result := make(nostr.Tags, len(tags))
+	for i, tag := range tags {
+		result[i] = tag
+	}
+	return result
 }
 
 // storeEvent stores an event in the database

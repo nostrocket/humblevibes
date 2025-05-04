@@ -30,6 +30,7 @@ type Config struct {
 	SkipOld      bool
 	UseDiscovery bool // Flag to indicate if we should use relay discovery
 	MaxRelays    int  // Maximum number of relays to discover
+	NIP65        bool // Use NIP-65 (kind 10002) events to find user's preferred relays
 }
 
 // NostrWatchRelay represents a relay from the nostr.watch API response
@@ -113,6 +114,9 @@ func main() {
 	relayCount := flag.Int("relays", 10, "Number of relays to auto-discover when using -discover")
 	flag.IntVar(relayCount, "n", 10, "Number of relays to auto-discover (shorthand)")
 	
+	// Add NIP-65 relay discovery option
+	useNIP65 := flag.Bool("nip65", false, "Discover user's preferred relays from their NIP-65 (kind 10002) events")
+	
 	// Keep max-relays for backward compatibility
 	flag.IntVar(relayCount, "max-relays", 10, "Maximum number of relays to discover (legacy, use -relays instead)")
 	
@@ -171,7 +175,39 @@ func main() {
 	
 	// If source relays are empty and discovery is enabled, fetch from nostr.watch
 	if *sourceRelays == "" {
-		if *useDiscovery {
+		if *useNIP65 && *pubkeys != "" {
+			// First, check if there's a pubkey specified since we need it for NIP-65
+			pubkeysList := strings.Split(*pubkeys, ",")
+			if len(pubkeysList) > 0 {
+				// Use the first pubkey for NIP-65 discovery
+				pubkey := strings.TrimSpace(pubkeysList[0])
+				
+				// Convert to hex if it's a bech32 key
+				hexPk, err := client.ConvertBech32PubkeyToHex(pubkey)
+				if err != nil {
+					forwarderLogger.Error("Invalid pubkey format for NIP-65 discovery: %v", err)
+					os.Exit(1)
+				}
+				
+				// Create a forwarder with default config just for NIP-65 discovery
+				tempConfig := Config{
+					MaxRelays: *relayCount,
+				}
+				tempForwarder := NewForwarder(tempConfig)
+				
+				// Find relays from NIP-65
+				nip65Relays, err := tempForwarder.FindRelaysFromNIP65(hexPk)
+				if err != nil {
+					forwarderLogger.Warn("NIP-65 discovery failed: %v. Falling back to nostr.watch discovery.", err)
+				} else if len(nip65Relays) > 0 {
+					forwarderLogger.Info("Using %d relays from NIP-65 event", len(nip65Relays))
+					relayList = nip65Relays
+				}
+			}
+		}
+		
+		// If we didn't get relays from NIP-65, fall back to nostr.watch discovery
+		if len(relayList) == 0 && *useDiscovery {
 			discoveredRelays, err := fetchPopularRelays(*relayCount)
 			if err != nil {
 				forwarderLogger.Error("Failed to discover relays: %v", err)
@@ -183,8 +219,11 @@ func main() {
 				os.Exit(1)
 			}
 			relayList = discoveredRelays
-		} else {
-			forwarderLogger.Error("No source relays specified. Use -sources flag to provide relay URLs or -discover flag to automatically discover relays.")
+		}
+		
+		// If we still have no relays, show an error
+		if len(relayList) == 0 {
+			forwarderLogger.Error("No source relays specified. Use -sources flag to provide relay URLs, -discover flag to automatically discover relays, or -nip65 to use the author's preferred relays.")
 			flag.Usage()
 			os.Exit(1)
 		}
@@ -204,6 +243,7 @@ func main() {
 		SkipOld:      *skipOld,
 		UseDiscovery: *useDiscovery,
 		MaxRelays:    *relayCount,
+		NIP65:        *useNIP65,
 	}
 
 	// Print configuration
@@ -457,6 +497,138 @@ func (f *Forwarder) forwardEvents(events []*client.Event) {
 		// Add a small delay between events to prevent overwhelming the relay
 		time.Sleep(50 * time.Millisecond)
 	}
+}
+
+// FindRelaysFromNIP65 discovers relays from a user's NIP-65 (kind 10002) event
+func (f *Forwarder) FindRelaysFromNIP65(pubkey string) ([]string, error) {
+	forwarderLogger.Info("Looking for NIP-65 relay list for pubkey %s...", pubkey)
+	
+	// First, we need to discover initial relays to find the NIP-65 event
+	initialRelays, err := fetchPopularRelays(f.config.MaxRelays)
+	if err != nil {
+		return nil, fmt.Errorf("failed to fetch initial relays: %v", err)
+	}
+	
+	// Store the discovered NIP-65 relays
+	var nip65Relays []string
+	var nip65EventFound = false
+	var nip65ConnectMutex sync.Mutex
+	
+	// Connect to initial relays and look for the NIP-65 event
+	var nip65Wg sync.WaitGroup
+	nip65Wg.Add(len(initialRelays))
+	
+	for _, relayURL := range initialRelays {
+		// Capture the relayURL for the goroutine
+		relayURL := relayURL
+		
+		// Start a goroutine to connect to this relay and look for NIP-65 events
+		go func() {
+			defer nip65Wg.Done()
+			
+			// Connect to the relay
+			sourceClient, err := client.NewNostrClient(relayURL)
+			if err != nil {
+				forwarderLogger.Warn("Failed to connect to relay %s for NIP-65 discovery: %v", relayURL, err)
+				return
+			}
+			defer sourceClient.Close()
+			
+			// Create NIP-65 filter
+			nip65Filter := map[string]interface{}{
+				"kinds":   []int{10002}, // NIP-65 relay list event
+				"authors": []string{pubkey},
+				"limit":   1, // We only need the most recent one
+			}
+			
+			// Create a channel for events and a channel for completion signals
+			eventChan := make(chan *client.Event, 1)
+			completeChan := make(chan struct{})
+			
+			// Set up handler for NIP-65 events
+			handler := func(event *client.Event) {
+				// We're only interested in the first event we receive
+				select {
+				case eventChan <- event:
+				default:
+					// Channel is full, ignoring additional events
+				}
+			}
+			
+			// Subscribe to NIP-65 events
+			subID := fmt.Sprintf("nip65_%x", time.Now().UnixNano())
+			err = sourceClient.SubscribeToEventsWithHandler(subID, nip65Filter, handler)
+			if err != nil {
+				forwarderLogger.Warn("Failed to subscribe to NIP-65 events from %s: %v", relayURL, err)
+				return
+			}
+			
+			// Set a timeout to limit how long we search for NIP-65 events
+			timeout := time.After(5 * time.Second)
+			
+			// Wait for event or timeout
+			select {
+			case event := <-eventChan:
+				// Process NIP-65 event to extract relay URLs
+				relays := extractRelaysFromNIP65Event(event)
+				if len(relays) > 0 {
+					nip65ConnectMutex.Lock()
+					if !nip65EventFound {
+						// This is the first NIP-65 event we found
+						nip65EventFound = true
+						nip65Relays = relays
+						forwarderLogger.Info("Found NIP-65 event with %d relay URLs from %s", len(relays), relayURL)
+					}
+					nip65ConnectMutex.Unlock()
+				}
+				
+			case <-timeout:
+				// Timeout occurred
+				forwarderLogger.Debug("Timeout waiting for NIP-65 events from %s", relayURL)
+			}
+			
+			// Cancel the subscription
+			close(completeChan)
+		}()
+	}
+	
+	// Wait for all relays to be checked
+	nip65Wg.Wait()
+	
+	// Return the discovered relays from NIP-65 event
+	if nip65EventFound {
+		return nip65Relays, nil
+	}
+	
+	return nil, fmt.Errorf("no NIP-65 events found for pubkey %s", pubkey)
+}
+
+// extractRelaysFromNIP65Event extracts relay URLs from a NIP-65 (kind 10002) event
+func extractRelaysFromNIP65Event(event *client.Event) []string {
+	var relays []string
+	
+	// NIP-65 uses 'r' tags for relay URLs
+	for _, tag := range event.Tags {
+		if len(tag) >= 2 && tag[0] == "r" {
+			// The relay URL is in the second position (index 1)
+			relayURL := tag[1]
+			
+			// Optional read/write value is in third position (index 2)
+			// We include relays with no marker or with 'read' or 'write'
+			// We need both for our purpose (read to fetch events, write to forward them)
+			if len(tag) < 3 || tag[2] == "read" || tag[2] == "write" {
+				// In a NIP-65 event, relays are often listed like this:
+				// ["r", "wss://relay.example.com", "read"]
+				// ["r", "wss://another.relay.example", "write"]
+				// We also need to ensure the URL begins with ws:// or wss://
+				if strings.HasPrefix(relayURL, "wss://") || strings.HasPrefix(relayURL, "ws://") {
+					relays = append(relays, relayURL)
+				}
+			}
+		}
+	}
+	
+	return relays
 }
 
 // truncateString truncates a string to the specified length
