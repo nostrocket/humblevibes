@@ -617,6 +617,11 @@ func (c *NostrClient) SubscribeToEvents(subscriptionID string, filters map[strin
 				// handler(&event)
 
 			case "EOSE":
+				// Check if message contains subscription ID to avoid panic
+				if len(msg) < 2 {
+					clientLogger.Warn("Received malformed EOSE message")
+					continue
+				}
 				// End of stored events
 				var eoseSubID string
 				if err := json.Unmarshal(msg[1], &eoseSubID); err != nil {
@@ -785,6 +790,11 @@ func (c *NostrClient) SubscribeToEventsWithHandler(subscriptionID string, filter
 			handler(&event)
 			
 		case "EOSE":
+			// Check if message contains subscription ID to avoid panic
+			if len(msg) < 2 {
+				clientLogger.Warn("Received malformed EOSE message")
+				continue
+			}
 			// End of stored events
 			var eoseSubID string
 			if err := json.Unmarshal(msg[1], &eoseSubID); err != nil {
@@ -820,34 +830,6 @@ func (c *NostrClient) SubscribeToEventsWithHandler(subscriptionID string, filter
 						
 						// Increase the heartbeat frequency after EOSE to keep the connection more stable
 						heartbeatTicker.Reset(10 * time.Second)
-					}()
-					
-					// Also send a REQ with limit:0 as a lightweight keep-alive request
-					go func() {
-						select {
-						case <-ctx.Done():
-							return
-						case <-time.After(1 * time.Second):
-							// Create a lightweight REQ that won't return any events
-							keepAliveReq, _ := json.Marshal([]interface{}{
-								"REQ", 
-								fmt.Sprintf("keep_alive_%s", subscriptionID), 
-								map[string]interface{}{
-									"limit": 0,
-									"since": time.Now().Unix(),
-								},
-							})
-							
-							c.mu.Lock()
-							keepAliveErr := c.conn.WriteMessage(websocket.TextMessage, keepAliveReq)
-							c.mu.Unlock()
-							
-							if keepAliveErr != nil {
-								clientLogger.Warn("Failed to send keep-alive REQ: %v", keepAliveErr)
-							} else {
-								clientLogger.Debug("Sent keep-alive REQ after EOSE")
-							}
-						}
 					}()
 				}
 			}
@@ -1038,6 +1020,11 @@ func (c *NostrClient) SubscribeToEventsWithHandlerAndEOSE(subscriptionID string,
 			handler(&event)
 			
 		case "EOSE":
+			// Check if message contains subscription ID to avoid panic
+			if len(msg) < 2 {
+				clientLogger.Warn("Received malformed EOSE message")
+				continue
+			}
 			// End of stored events
 			var eoseSubID string
 			if err := json.Unmarshal(msg[1], &eoseSubID); err != nil {
@@ -1078,34 +1065,6 @@ func (c *NostrClient) SubscribeToEventsWithHandlerAndEOSE(subscriptionID string,
 						
 						// Increase the heartbeat frequency after EOSE to keep the connection more stable
 						heartbeatTicker.Reset(10 * time.Second)
-					}()
-					
-					// Also send a REQ with limit:0 as a lightweight keep-alive request
-					go func() {
-						select {
-						case <-ctx.Done():
-							return
-						case <-time.After(1 * time.Second):
-							// Create a lightweight REQ that won't return any events
-							keepAliveReq, _ := json.Marshal([]interface{}{
-								"REQ", 
-								fmt.Sprintf("keep_alive_%s", subscriptionID), 
-								map[string]interface{}{
-									"limit": 0,
-									"since": time.Now().Unix(),
-								},
-							})
-							
-							c.mu.Lock()
-							keepAliveErr := c.conn.WriteMessage(websocket.TextMessage, keepAliveReq)
-							c.mu.Unlock()
-							
-							if keepAliveErr != nil {
-								clientLogger.Warn("Failed to send keep-alive REQ: %v", keepAliveErr)
-							} else {
-								clientLogger.Debug("Sent keep-alive REQ after EOSE")
-							}
-						}
 					}()
 				}
 			}
@@ -1159,37 +1118,24 @@ func (c *NostrClient) SubscribeToEventsWithHandlerAndEOSE(subscriptionID string,
 }
 
 // SendPing sends a lightweight ping message to keep the WebSocket connection alive
-// It uses a "REQ" message with a filter that won't match any events (limit:0)
-// This functions as a keep-alive mechanism without requesting any actual events
+// It uses a "PING" message
 func (c *NostrClient) SendPing(pingID string) error {
-	// Create a ping filter with limit:0 so no events will be returned
-	pingFilter := map[string]interface{}{
-		"limit": 0,
-		"kinds": []int{0}, // Use kind 0 (metadata) for pings as it's common but innocuous
-	}
-
-	// Create and send the REQ message
-	message := []interface{}{"REQ", pingID, pingFilter}
-	
-	// Log the ping for debugging
-	clientLogger.Debug("Sending keep-alive ping with ID: %s", pingID)
-	
-	// Set a write deadline for the ping
+	// Send a PING message as per Nostr protocol
+	message := []interface{}{"PING", pingID}
+	clientLogger.Debug("Sending PING: %s", pingID)
+	// Set write deadline for ping
 	if err := c.conn.SetWriteDeadline(time.Now().Add(10 * time.Second)); err != nil {
-		clientLogger.Warn("Failed to set write deadline for ping: %v", err)
+		clientLogger.Warn("Failed to set write deadline for PING: %v", err)
 	}
-	
-	// Send the ping as a REQ
+	// Send the PING message
 	if err := c.conn.WriteJSON(message); err != nil {
-		clientLogger.Error("Failed to send ping: %v", err)
+		clientLogger.Error("Failed to send PING: %v", err)
 		return err
 	}
-	
 	// Reset write deadline
 	if err := c.conn.SetWriteDeadline(time.Time{}); err != nil {
-		clientLogger.Warn("Failed to reset write deadline after ping: %v", err)
+		clientLogger.Warn("Failed to reset write deadline after PING: %v", err)
 	}
-	
 	return nil
 }
 
@@ -1276,6 +1222,11 @@ func (c *NostrClient) Subscribe(filters []map[string]interface{}, eventHandler f
 				eventHandler(&event)
 
 			case "EOSE":
+				// Check if message contains subscription ID to avoid panic
+				if len(msg) < 2 {
+					clientLogger.Warn("Received malformed EOSE message")
+					continue
+				}
 				// End of stored events
 				var eoseSubID string
 				if err := json.Unmarshal(msg[1], &eoseSubID); err != nil {

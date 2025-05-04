@@ -9,6 +9,7 @@ A simple Nostr relay and client implementation in Go with SQLite storage.
 - **Monitor**: Tool to track database changes in real-time
 - **Forwarder**: Tool to subscribe to external relays and forward events to your local relay
 - **Content Export**: Tool to export event content from specific authors to text files
+- **nostr-broadcast**: Tool to broadcast a Nostr event to all online relays listed on nostr.watch
 
 ## Quick Start
 
@@ -93,6 +94,27 @@ make run-forwarder-relay SOURCE="ws://relay.example.com/ws" TARGET="ws://localho
 
 # Forward from multiple relays to a custom target with additional filters
 make run-forwarder-relay SOURCE="ws://relay1.com/ws,ws://relay2.com/ws" TARGET="ws://custom-relay.com/ws" ARGS="-kinds 1,4 -log"
+
+## nostr-broadcast
+
+Broadcast a Nostr event to all online relays listed on nostr.watch.
+
+### Build
+
+```
+make bin/nostr-broadcast
+```
+
+### Usage
+
+```
+./bin/nostr-broadcast <event-id>
+```
+
+- Retrieves the event from `nostr.db` by event ID.
+- Fetches all online relays from nostr.watch.
+- Broadcasts the event concurrently to all relays.
+- Reports any errors or failures per relay.
 
 ## Content Export Options
 

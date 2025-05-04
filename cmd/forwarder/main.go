@@ -98,11 +98,11 @@ func main() {
 	// Parse command-line flags
 	targetRelay := flag.String("target", "ws://localhost:8080/ws", "Target relay URL to forward events to")
 	sourceRelays := flag.String("sources", "", "Comma-separated list of source relay URLs to subscribe to")
-	kinds := flag.String("kinds", "1", "Comma-separated list of event kinds to forward (e.g., '1,4,7')")
+	kinds := flag.String("kinds", "", "Comma-separated list of event kinds to forward (default all kinds)")
 	pubkeys := flag.String("pubkeys", "", "Comma-separated list of public keys to filter by (hex format)")
 	since := flag.Int64("since", 0, "Only forward events newer than this Unix timestamp (0 = no limit)")
 	until := flag.Int64("until", 0, "Only forward events older than this Unix timestamp (0 = no limit)")
-	limit := flag.Int("limit", 100, "Maximum number of events to request from each source relay")
+	limit := flag.Int("limit", 0, "Maximum number of events to request from each source relay (0 = no limit)")
 	batchSize := flag.Int("batch", 10, "Number of events to forward in a batch")
 	logEvents := flag.Bool("log", false, "Log event details when forwarding")
 	printEvents := flag.Bool("print-events", false, "Print each event received before forwarding")
@@ -122,18 +122,25 @@ func main() {
 	
 	flag.Parse()
 
-	// Parse kinds
-	kindsList := []int{}
-	for _, k := range strings.Split(*kinds, ",") {
-		var kind int
-		fmt.Sscanf(k, "%d", &kind)
-		kindsList = append(kindsList, kind)
+	// Parse kinds (empty = all kinds)
+	var kindsList []int
+	if *kinds != "" {
+		for _, k := range strings.Split(*kinds, ",") {
+			var kind int
+			fmt.Sscanf(k, "%d", &kind)
+			kindsList = append(kindsList, kind)
+		}
 	}
 
 	// Create filters
-	filters := map[string]interface{}{
-		"kinds": kindsList,
-		"limit": *limit,
+	filters := map[string]interface{}{}
+	if *limit > 0 {
+		filters["limit"] = *limit
+	}
+
+	// Add kinds filter if specified
+	if len(kindsList) > 0 {
+		filters["kinds"] = kindsList
 	}
 
 	// Add pubkeys filter if specified
@@ -315,6 +322,19 @@ func (f *Forwarder) Start() {
 		os.Exit(1)
 	}
 
+	// Deduplicate source relays to avoid multiple REQs to the same relay
+	seen := make(map[string]struct{})
+	uniqueRelays := make([]string, 0, len(f.config.SourceRelays))
+	for _, url := range f.config.SourceRelays {
+		if _, exists := seen[url]; !exists {
+			seen[url] = struct{}{}
+			uniqueRelays = append(uniqueRelays, url)
+		}
+	}
+	if len(uniqueRelays) < len(f.config.SourceRelays) {
+		forwarderLogger.Info("Removed %d duplicate source relays", len(f.config.SourceRelays)-len(uniqueRelays))
+	}
+	
 	// Use a mutex to protect concurrent access to sourceClients
 	var sourceClientsMutex sync.Mutex
 	
@@ -322,8 +342,8 @@ func (f *Forwarder) Start() {
 	var connectWg sync.WaitGroup
 	
 	// Connect to source relays concurrently
-	connectWg.Add(len(f.config.SourceRelays))
-	for _, relayURL := range f.config.SourceRelays {
+	connectWg.Add(len(uniqueRelays))
+	for _, relayURL := range uniqueRelays {
 		// Capture the relayURL for the goroutine
 		relayURL := relayURL
 		
@@ -353,8 +373,7 @@ func (f *Forwarder) Start() {
 	connectWg.Wait()
 	
 	// Log the result
-	forwarderLogger.Info("Connected to %d out of %d source relays", 
-		len(f.sourceClients), len(f.config.SourceRelays))
+	forwarderLogger.Info("Connected to %d out of %d unique source relays", len(f.sourceClients), len(uniqueRelays))
 
 	// Start event processor
 	f.wg.Add(1)
@@ -368,16 +387,16 @@ func (f *Forwarder) Stop() {
 	// Signal all goroutines to stop
 	close(f.stopChan)
 
-	// Wait for all goroutines to finish
-	f.wg.Wait()
-
-	// Close connections
-	if f.targetClient != nil {
-		f.targetClient.Close()
-	}
+	// Close connections to trigger read errors and exit subscriptions
 	for _, client := range f.sourceClients {
 		client.Close()
 	}
+	if f.targetClient != nil {
+		f.targetClient.Close()
+	}
+
+	// Wait for all goroutines to finish
+	f.wg.Wait()
 }
 
 // subscribeToRelay subscribes to events from a source relay

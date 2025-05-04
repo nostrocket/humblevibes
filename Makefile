@@ -1,4 +1,4 @@
-.PHONY: all build clean run-relay run-relay-custom run-relay-timeout run-publisher run-publisher-custom run-publisher-interactive run-publisher-multi run-monitor run-forwarder run-forwarder-custom run-forwarder-relay run-reverse-forwarder run-reverse-forwarder-custom run-reverse-forwarder-discover run-export-content run-export-content-custom harvest-and-export harvest-and-export-custom test test-unit test-integration test-all test-forwarder
+.PHONY: all build clean run-relay run-relay-custom run-relay-timeout run-publisher run-publisher-custom run-publisher-interactive run-publisher-multi run-monitor run-forwarder run-forwarder-custom run-forwarder-relay run-reverse-forwarder run-reverse-forwarder-custom run-reverse-forwarder-discover run-export-content run-export-content-custom harvest-and-export harvest-and-export-custom test test-unit test-integration test-all test-forwarder relay publisher monitor forwarder reverse-forwarder export-content tester broadcast
 
 # Binary output directory
 BIN_DIR=bin
@@ -11,16 +11,14 @@ FORWARDER_BIN=$(BIN_DIR)/nostr-forwarder
 REVERSE_FORWARDER_BIN=$(BIN_DIR)/nostr-reverse-forwarder
 EXPORT_CONTENT_BIN=$(BIN_DIR)/nostr-export-content
 TESTER_BIN=$(BIN_DIR)/nostr-tester
-
-# Build all binaries
-all: build
+BROADCAST_BIN=$(BIN_DIR)/nostr-broadcast
 
 # Create bin directory if it doesn't exist
 $(BIN_DIR):
 	mkdir -p $(BIN_DIR)
 
-# Build both relay and publisher
-build: $(BIN_DIR) relay publisher monitor forwarder reverse-forwarder export-content tester
+# Build all binaries
+all: $(BIN_DIR) relay publisher monitor forwarder reverse-forwarder export-content tester broadcast
 
 relay:
 	go build -o $(RELAY_BIN) ./cmd/relay
@@ -43,9 +41,12 @@ export-content:
 tester:
 	go build -o $(TESTER_BIN) ./cmd/tester
 
+broadcast:
+	go build -o $(BROADCAST_BIN) ./cmd/broadcast
+
 # Clean up binaries
 clean:
-	rm -f $(RELAY_BIN) $(PUBLISHER_BIN) $(MONITOR_BIN) $(FORWARDER_BIN) $(REVERSE_FORWARDER_BIN) $(EXPORT_CONTENT_BIN) $(TESTER_BIN)
+	rm -f $(RELAY_BIN) $(PUBLISHER_BIN) $(MONITOR_BIN) $(FORWARDER_BIN) $(REVERSE_FORWARDER_BIN) $(EXPORT_CONTENT_BIN) $(TESTER_BIN) $(BROADCAST_BIN)
 	rm -f test_nostr.db
 
 # Run the relay server
@@ -163,6 +164,7 @@ install:
 	go install ./cmd/reverse-forwarder
 	go install ./cmd/export-content
 	go install ./cmd/tester
+	go install ./cmd/broadcast
 
 # Run a full validation test
 validate: build test-all
