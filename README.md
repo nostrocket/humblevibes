@@ -4,7 +4,7 @@ A simple Nostr relay and client implementation in Go with SQLite storage.
 
 ## Components
 
-- **Relay**: Nostr relay server with SQLite backend
+- **Relay**: The main Nostr relay server
 - **Publisher**: Tool to publish events to relays
 - **Monitor**: Tool to track database changes in real-time
 - **Forwarder**: Tool to subscribe to external relays and forward events to your local relay
@@ -20,12 +20,16 @@ make all
 
 Run the relay:
 ```bash
+make run-relay
+# or directly:
 ./bin/relay
 ```
 
 Publish a note:
 ```bash
-./bin/publisher -relay ws://localhost:8080/ws -content "Hello, Nostr!" -kind 1
+make run-publish-sample-events
+# or with custom options:
+./bin/publish-sample-events -relay ws://localhost:8080/ws -content "Hello, Nostr!" -kind 1
 ```
 
 Monitor database changes:
@@ -35,7 +39,9 @@ make run-monitor
 
 Forward events from other relays:
 ```bash
-make run-forwarder-custom ARGS="-sources ws://example.com/ws,ws://another.com/ws -kinds 1,4"
+make run-fetch-and-publish-custom ARGS="-sources wss://relay.damus.io -target ws://localhost:8080/ws -kinds 1,4"
+# or directly:
+./bin/fetch-and-publish -sources wss://relay.damus.io -target ws://localhost:8080/ws -kinds 1,4
 ```
 
 Export event content from a pubkey:
@@ -43,50 +49,37 @@ Export event content from a pubkey:
 make run-export-content-custom PUBKEY=3bf0c63fcb93463407af97a5e5ee64fa883d107ef9e558472c4eb9aaaef47fec
 ```
 
-## Custom Options
-
-Run relay on a specific port:
+Broadcast an event to multiple relays:
 ```bash
-./bin/relay -port 8090
+make run-broadcast EVENT_ID=<event-id>
+# or directly:
+./bin/broadcast <event-id>
 ```
 
-Publish multiple notes:
+## Relay Options
+
+The relay supports several command-line options:
+
+- `-port`: Port to run the relay on (default: 8080)
+- `-db`: Path to SQLite database (default: "nostr.db")
+- `-verbose`: Enable verbose logging of received events
+- `-v`: Short form for verbose logging
+- `-timeout`: WebSocket connection timeout in seconds (default: 0, no timeout)
+
+Examples:
+
 ```bash
-./bin/publisher -relay ws://localhost:8080/ws -content "Hello, Nostr!" -kind 1 -num 5
-```
-
-Interactive publisher mode:
-```bash
-./bin/publisher -interactive
-```
-
-## Run the relay
-
-```bash
-# Build the relay
-make relay
-
-# Run with default settings (port 8080, nostr.db)
-./bin/relay
+# Run with default settings
+make run-relay
 
 # Run with custom port
-./bin/relay -port 9000
+make run-relay-custom ARGS="-port 9000"
+
+# Run with verbose logging
+make run-relay-custom ARGS="-v"
 
 # Run with custom database
-./bin/relay -db custom_nostr.db
-```
-
-## Publish events
-
-```bash
-# Build the publisher
-make publisher
-
-# Publish a simple note
-./bin/publisher -relay ws://localhost:8080/ws -content "Hello, Nostr!" -kind 1
-
-# Run in interactive mode
-./bin/publisher -interactive
+make run-relay-custom ARGS="-db custom_nostr.db"
 ```
 
 ## Forwarder Options
@@ -95,55 +88,53 @@ The forwarder supports several command-line options:
 
 - `-sources`: Comma-separated list of source relay URLs to subscribe to
 - `-target`: Target relay URL to forward events to (default: "ws://localhost:8080/ws")
-- `-kinds`: Comma-separated list of event kinds to forward (default: "1")
+- `-kinds`: Comma-separated list of event kinds to forward
 - `-pubkeys`: Comma-separated list of public keys to filter by (supports both hex and bech32/npub formats)
 - `-since`: Only forward events newer than this Unix timestamp (0 = no limit)
 - `-until`: Only forward events older than this Unix timestamp (0 = no limit)
-- `-limit`: Maximum number of events to request from each source relay (default: 100)
+- `-limit`: Maximum number of events to request from each source relay
 - `-batch`: Number of events to forward in a batch (default: 10)
-- `-log`: Log event details when forwarding (default: false)
+- `-log`: Log event details when forwarding
+- `-discover`: Automatically discover relays using nostr.watch API
+- `-relays`: Number of relays to auto-discover (default: 10)
+- `-nip65`: Discover user's preferred relays from their NIP-65 (kind 10002) events
 
 Examples:
 
 ```bash
-# Forward events from specific authors (using hex format)
-make run-forwarder-custom ARGS="-sources ws://relay.example.com/ws -pubkeys 3bf0c63fcb93463407af97a5e5ee64fa883d107ef9e558472c4eb9aaaefa459d"
+# Forward events from specific authors
+make run-fetch-and-publish-custom ARGS="-sources wss://relay.damus.io -pubkeys 3bf0c63fcb93463407af97a5e5ee64fa883d107ef9e558472c4eb9aaaefa459d"
 
-# Forward events from specific authors (using bech32/npub format)
-make run-forwarder-custom ARGS="-sources ws://relay.example.com/ws -pubkeys npub1sn0wdenkukak0d9dfczzeacvhkrgz92ak56egt7vdgzn8pv2wfqqhrjdv9"
+# Forward events using NIP-65 relay discovery
+make run-fetch-and-publish-custom ARGS="-nip65 -pubkeys npub1sn0wdenkukak0d9dfczzeacvhkrgz92ak56egt7vdgzn8pv2wfqqhrjdv9"
 
 # Forward recent events (last 24 hours)
-make run-forwarder-custom ARGS="-sources ws://relay.example.com/ws -since $(date -v-1d +%s)"
+make run-fetch-and-publish-custom ARGS="-sources wss://relay.damus.io -since $(date -v-1d +%s)"
 
 # Forward only reactions and metadata
-make run-forwarder-custom ARGS="-sources ws://relay.example.com/ws -kinds 7,0"
+make run-fetch-and-publish-custom ARGS="-sources wss://relay.damus.io -kinds 7,0"
 
-# Forward from one relay to another (simplified syntax)
-make run-forwarder-relay SOURCE="ws://relay.example.com/ws" TARGET="ws://localhost:9000/ws"
-
-# Forward from multiple relays to a custom target with additional filters
-make run-forwarder-relay SOURCE="ws://relay1.com/ws,ws://relay2.com/ws" TARGET="ws://custom-relay.com/ws" ARGS="-kinds 1,4 -log"
-
-## Broadcast
-
-Broadcast a Nostr event to all online relays listed on nostr.watch.
-
-### Build
-
-```
-make bin/broadcast
+# Forward from multiple relays with auto-discovery
+make run-fetch-and-publish-custom ARGS="-discover -relays 20 -kinds 1,4 -log"
 ```
 
-### Usage
+## Broadcast Tool
 
-```
+The broadcast tool sends a Nostr event to all online relays listed on nostr.watch.
+
+```bash
+# Broadcast an event by ID
+make run-broadcast EVENT_ID=<event-id>
+
+# Or directly
 ./bin/broadcast <event-id>
 ```
 
-- Retrieves the event from `nostr.db` by event ID.
-- Fetches all online relays from nostr.watch.
-- Broadcasts the event concurrently to all relays.
-- Reports any errors or failures per relay.
+The tool:
+1. Retrieves the event from the local database by ID
+2. Fetches the list of online relays from nostr.watch
+3. Broadcasts the event concurrently to all relays
+4. Reports success/failure statistics
 
 ## Content Export Options
 
@@ -158,62 +149,48 @@ The content export tool supports several command-line options:
 Examples:
 
 ```bash
-# Export all content from a specific pubkey in chronological order
+# Export all content from a specific pubkey
 make run-export-content-custom PUBKEY=3bf0c63fcb93463407af97a5e5ee64fa883d107ef9e558472c4eb9aaaef47fec
 
-# Export all content in reverse chronological order to a specific file
+# Export in reverse chronological order to a specific file
 make run-export-content-custom PUBKEY=3bf0c63fcb93463407af97a5e5ee64fa883d107ef9e558472c4eb9aaaef47fec ARGS="--sort desc --output my_export.txt"
-
-# Use a custom separator
-make run-export-content-custom PUBKEY=3bf0c63fcb93463407af97a5e5ee64fa883d107ef9e558472c4eb9aaaef47fec ARGS="--separator '\n---\n'"
-
-## Automated Content Harvesting
-
-The project includes automated workflows to harvest content from a specific pubkey across multiple relays and export it to a text file:
-
-```bash
-# Use the existing database (default)
-make harvest-and-export PUBKEY=npub1mygerccwqpzyh9pvp6pv44rskv40zutkfs38t0hqhkvnwlhagp6s3psn5p
-
-# Use a dedicated database just for this harvesting operation
-make harvest-and-export-custom PUBKEY=npub1mygerccwqpzyh9pvp6pv44rskv40zutkfs38t0hqhkvnwlhagp6s3psn5p
 ```
 
-These commands perform the following steps automatically:
+## Monitor Tool
 
-1. Starts a local relay on port 8899 (with either the default database or a dedicated one)
-2. Runs a dual-phase discovery process:
-   - First phase: Connects to 250 relays and collects content for 3 minutes
-   - Second phase: Connects to 250 different relays and collects content for 3 minutes
-3. Stops all processes and exports the collected content in chronological order
+The monitor tool tracks changes to the database in real-time:
 
-The dual-phase approach ensures more comprehensive relay coverage by connecting to different relay sets in each phase. This helps discover content that might only be available on certain relays.
+```bash
+# Run the monitor
+make run-monitor
 
-The exported content will be saved to a file named `<PUBKEY>_harvested.txt`.
-
-Use the default database (`harvest-and-export`) when you want to:
-- Add harvested content to your main database
-- Keep all events in one place for future access
-- Build on existing content you've already collected
-
-Use a dedicated database (`harvest-and-export-custom`) when you want to:
-- Create an isolated collection for a specific purpose
-- Avoid affecting your main database
-- Export content from just one harvesting session
-
-This is useful for quickly collecting and aggregating all content from a specific author across the Nostr network.
+# Run with custom options
+make run-monitor-custom ARGS="-db custom_nostr.db -kinds 1,4"
+```
 
 ## Testing
 
-Run all tests:
+Run the tests:
 ```bash
+# Run core relay tests
 make test
+
+# Run all tests including integration tests
+make test-all
 ```
 
 ## Project Structure
 
 - `cmd/`: Command-line applications
+  - `relay/`: Main relay server
+  - `broadcast/`: Event broadcasting tool
+  - `export-content/`: Content export tool
+  - `fetch-and-publish/`: Event forwarding tool
+  - `monitor/`: Database monitoring tool
+  - `publish-sample-events/`: Event publishing tool
 - `relay/`: Core relay implementation
 - `client/`: Client library for Nostr protocol
+- `lib/`: Shared libraries
+  - `crypto/`: Cryptographic operations
+  - `utils/`: Utility functions
 - `test/`: Integration tests
-- `bin/`: Compiled binaries
